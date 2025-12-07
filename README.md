@@ -1,6 +1,6 @@
-# QDGeo: Quick and Dirty Molecular Geometry Conformation Optimization
+# QDGeo: Quick and Dirty Molecular Geometry Optimization
 
-QDGeo is a Python library for optimizing molecular geometries using conjugate gradient minimization. It takes a set of atoms, bonds (with ideal lengths), and angles (with ideal angles) and finds the 3D coordinates that minimize a harmonic energy function.
+QDGeo is a library for optimizing molecular geometries using conjugate gradient minimization. It takes a set of atoms, bonds (with ideal lengths), and angles (with ideal angles) and finds the 3D coordinates that minimize a harmonic energy function. You can also give it an RDKit Mol object.
 
 ## Features
 
@@ -19,7 +19,7 @@ uv pip install .
 
 ## Usage
 
-### Using RDKit Molecules (Recommended)
+### Using RDKit Mol object
 
 ```python
 from rdkit import Chem
@@ -89,17 +89,3 @@ High-level function for optimizing RDKit molecules.
 - `verbose`: If > 0, prints bond lengths and angles (default: 0)
 
 **Returns:** Optimized coordinates array, shape `(n_atoms, 3)`
-
-## Testing
-
-Run tests with:
-
-```bash
-pytest
-```
-
-For verbose output showing bond lengths and angles:
-
-```bash
-pytest -s
-```
