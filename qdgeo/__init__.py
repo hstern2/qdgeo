@@ -14,7 +14,7 @@ except ImportError:
                 break
     import _qdgeo
 
-from _qdgeo import Bond, Angle, Optimizer, optimize
+from _qdgeo import Bond, Angle, Dihedral, Optimizer, optimize
 from .optimize_mol import optimize_mol
 
-__all__ = ["Bond", "Angle", "Optimizer", "optimize", "optimize_mol"]
+__all__ = ["Bond", "Angle", "Dihedral", "Optimizer", "optimize", "optimize_mol"]
