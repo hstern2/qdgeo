@@ -17,6 +17,7 @@ dependencies = [
 dev = [
     "pytest>=6.0",
     "pytest-cov>=5",
+    "pytest-xdist"
 ]
 
 [tool.pytest.ini_options]
