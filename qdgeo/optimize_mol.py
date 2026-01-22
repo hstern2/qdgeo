@@ -46,7 +46,7 @@ def _get_dihedral_atoms(mol, j, k):
 
 def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, verbose=0,
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
-                 dihedral_k=5.0, repulsion_k=0.0, repulsion_cutoff=3.0):
+                 dihedral_k=5.0, repulsion_k=0.0, repulsion_cutoff=3.0, n_starts=10):
     """Optimize molecular geometry using QDGeo.
     
     Args:
@@ -61,6 +61,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         dihedral_k: Dihedral force constant (default: 5.0)
         repulsion_k: Non-bonded repulsion force constant (default: 0.0, disabled)
         repulsion_cutoff: Repulsion cutoff distance in Angstroms (default: 3.0)
+        n_starts: Number of random starting points to try (default: 10)
     
     Returns:
         Optimized coordinates array, shape (n_atoms, 3)
@@ -133,7 +134,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         bond_force_constant=bond_k, angle_force_constant=angle_k,
         dihedral_force_constant=dihedral_k,
         repulsion_force_constant=repulsion_k, repulsion_cutoff=repulsion_cutoff,
-        tolerance=tolerance, maxeval=maxeval, verbose=verbose
+        tolerance=tolerance, maxeval=maxeval, verbose=verbose, n_starts=n_starts
     )
     
     if verbose > 0:

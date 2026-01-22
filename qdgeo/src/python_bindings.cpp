@@ -88,7 +88,8 @@ PYBIND11_MODULE(_qdgeo, m) {
                                   double k_bond, double k_angle, double tol, double ls_tol,
                                   int maxeval, int verbose,
                                   const std::vector<std::tuple<int, int, int, int, double>>& dihedrals,
-                                  double k_dihedral, double k_repulsion, double repulsion_cutoff) {
+                                  double k_dihedral, double k_repulsion, double repulsion_cutoff,
+                                  int n_starts) {
         std::vector<Bond> b_vec;
         for (const auto& b : bonds)
             b_vec.emplace_back(std::get<0>(b), std::get<1>(b), std::get<2>(b));
@@ -101,19 +102,33 @@ PYBIND11_MODULE(_qdgeo, m) {
         
         Optimizer opt(n, b_vec, a_vec, k_bond, k_angle, d_vec, k_dihedral, k_repulsion, repulsion_cutoff);
         
-        std::vector<Cartesian> coords;
-        opt.random_coords(coords);
-        bool conv = opt.optimize(coords, tol, ls_tol, maxeval, verbose);
-        double energy = opt.energy(coords);
+        std::vector<Cartesian> best_coords;
+        double best_energy = std::numeric_limits<double>::max();
+        bool best_conv = false;
+        
+        for (int start = 0; start < n_starts; start++) {
+            std::vector<Cartesian> coords;
+            opt.random_coords(coords);
+            int v = (start == 0) ? verbose : 0;
+            bool conv = opt.optimize(coords, tol, ls_tol, maxeval, v);
+            double energy = opt.energy(coords);
+            
+            if (energy < best_energy) {
+                best_energy = energy;
+                best_coords = coords;
+                best_conv = conv;
+            }
+        }
         
         py::array_t<double> result({n, 3});
-        coords_to_numpy(coords, result);
-        return std::make_tuple(result, conv, energy);
+        coords_to_numpy(best_coords, result);
+        return std::make_tuple(result, best_conv, best_energy);
     }, py::arg("n_atoms"), py::arg("bonds"), py::arg("angles"),
        py::arg("bond_force_constant") = 1.0, py::arg("angle_force_constant") = 1.0,
        py::arg("tolerance") = 1e-6, py::arg("linesearch_tolerance") = 0.5,
        py::arg("maxeval") = 1000, py::arg("verbose") = 0,
        py::arg("dihedrals") = std::vector<std::tuple<int, int, int, int, double>>(),
        py::arg("dihedral_force_constant") = 1.0,
-       py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0);
+       py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0,
+       py::arg("n_starts") = 10);
 }
