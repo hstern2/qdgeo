@@ -281,3 +281,270 @@ class TestBenzene:
             dihedral_abs = abs(dihedral_abs)
             assert dihedral_abs < 30.0 or abs(dihedral_abs - 180) < 30.0
 
+
+class TestPentaneMultipleDihedrals:
+    def test_pentane_multiple_dihedrals(self):
+        """Test pentane with multiple dihedral constraints on different bonds."""
+        mol = Chem.MolFromSmiles('CCCCC')
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        assert len(c_atoms) == 5
+        
+        # Constrain two different dihedrals
+        dihedral_dict = {
+            (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 60.0,   # First dihedral: 60°
+            (c_atoms[1], c_atoms[2], c_atoms[3], c_atoms[4]): 120.0,  # Second dihedral: 120°
+        }
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=5.0,
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=0
+        )
+        
+        assert coords.shape == (n, 3)
+        
+        # Check first dihedral (should be ~60°)
+        dihedral1 = get_dihedral(coords, mol, c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3])
+        dihedral1_deg = np.rad2deg(dihedral1)
+        diff1 = dihedral_diff(dihedral1_deg, 60.0)
+        print(f"Pentane dihedral 1: target=60°, actual={dihedral1_deg:.2f}°, diff={diff1:.2f}°")
+        assert diff1 < 15.0, f"Dihedral 1 constraint failed: target=60°, actual={dihedral1_deg:.2f}°"
+        
+        # Check second dihedral (should be ~120°)
+        dihedral2 = get_dihedral(coords, mol, c_atoms[1], c_atoms[2], c_atoms[3], c_atoms[4])
+        dihedral2_deg = np.rad2deg(dihedral2)
+        diff2 = dihedral_diff(dihedral2_deg, 120.0)
+        print(f"Pentane dihedral 2: target=120°, actual={dihedral2_deg:.2f}°, diff={diff2:.2f}°")
+        assert diff2 < 15.0, f"Dihedral 2 constraint failed: target=120°, actual={dihedral2_deg:.2f}°"
+        
+        write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "pentane_dihedrals.sdf"), "Pentane Multiple Dihedrals")
+
+
+class TestHexaneAllDihedrals:
+    def test_hexane_all_dihedrals(self):
+        """Test hexane with constraints on all three C-C-C-C dihedrals."""
+        mol = Chem.MolFromSmiles('CCCCCC')
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        assert len(c_atoms) == 6
+        
+        # Constrain all three backbone dihedrals to different values
+        dihedral_dict = {
+            (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 180.0,  # Trans
+            (c_atoms[1], c_atoms[2], c_atoms[3], c_atoms[4]): 60.0,   # Gauche
+            (c_atoms[2], c_atoms[3], c_atoms[4], c_atoms[5]): -60.0,  # Gauche-
+        }
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=5.0,
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=0
+        )
+        
+        assert coords.shape == (n, 3)
+        
+        # Check all three dihedrals
+        targets = [180.0, 60.0, -60.0]
+        for idx, (i, j, k, l) in enumerate([
+            (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]),
+            (c_atoms[1], c_atoms[2], c_atoms[3], c_atoms[4]),
+            (c_atoms[2], c_atoms[3], c_atoms[4], c_atoms[5])
+        ]):
+            dihedral = get_dihedral(coords, mol, i, j, k, l)
+            dihedral_deg = np.rad2deg(dihedral)
+            diff = dihedral_diff(dihedral_deg, targets[idx])
+            print(f"Hexane dihedral {idx+1}: target={targets[idx]:.0f}°, actual={dihedral_deg:.2f}°, diff={diff:.2f}°")
+            assert diff < 15.0, f"Dihedral {idx+1} constraint failed: target={targets[idx]:.0f}°, actual={dihedral_deg:.2f}°"
+        
+        write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "hexane_all_dihedrals.sdf"), "Hexane All Dihedrals")
+
+
+class TestButanolDihedrals:
+    def test_butanol_multiple_constraints(self):
+        """Test 1-butanol with dihedral constraints on both C-C and C-O bonds."""
+        mol = Chem.MolFromSmiles('CCCCO')
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon and oxygen atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        o_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'O']
+        assert len(c_atoms) == 4 and len(o_atoms) == 1
+        
+        # Constrain C-C-C-C and C-C-C-O dihedrals
+        dihedral_dict = {
+            (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 180.0,  # C-C-C-C trans
+            (c_atoms[1], c_atoms[2], c_atoms[3], o_atoms[0]): 60.0,   # C-C-C-O gauche
+        }
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=5.0,
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=0
+        )
+        
+        assert coords.shape == (n, 3)
+        
+        # Check C-C-C-C dihedral
+        dihedral1 = get_dihedral(coords, mol, c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3])
+        dihedral1_deg = np.rad2deg(dihedral1)
+        diff1 = dihedral_diff(dihedral1_deg, 180.0)
+        print(f"Butanol C-C-C-C: target=180°, actual={dihedral1_deg:.2f}°, diff={diff1:.2f}°")
+        assert diff1 < 15.0, f"C-C-C-C dihedral failed: target=180°, actual={dihedral1_deg:.2f}°"
+        
+        # Check C-C-C-O dihedral
+        dihedral2 = get_dihedral(coords, mol, c_atoms[1], c_atoms[2], c_atoms[3], o_atoms[0])
+        dihedral2_deg = np.rad2deg(dihedral2)
+        diff2 = dihedral_diff(dihedral2_deg, 60.0)
+        print(f"Butanol C-C-C-O: target=60°, actual={dihedral2_deg:.2f}°, diff={diff2:.2f}°")
+        assert diff2 < 15.0, f"C-C-C-O dihedral failed: target=60°, actual={dihedral2_deg:.2f}°"
+        
+        write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "butanol_dihedrals.sdf"), "Butanol Dihedrals")
+
+
+class TestIsopentaneBranched:
+    def test_isopentane_branched_dihedrals(self):
+        """Test isopentane (2-methylbutane) with dihedral constraints on branched molecule."""
+        mol = Chem.MolFromSmiles('CC(C)CC')  # 2-methylbutane
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        assert len(c_atoms) == 5
+        
+        # Find the central carbon (has 3 carbon neighbors)
+        central_c = None
+        for c in c_atoms:
+            neighbors = mol.GetAtomWithIdx(c).GetNeighbors()
+            c_neighbors = [n.GetIdx() for n in neighbors if n.GetSymbol() == 'C']
+            if len(c_neighbors) == 3:
+                central_c = c
+                break
+        
+        assert central_c is not None
+        
+        # Get the three carbons bonded to central carbon
+        neighbors = mol.GetAtomWithIdx(central_c).GetNeighbors()
+        neighbor_carbons = [n.GetIdx() for n in neighbors if n.GetSymbol() == 'C']
+        assert len(neighbor_carbons) == 3
+        
+        # Find one more carbon connected to one of the neighbors (for a 4-atom dihedral)
+        fourth_c = None
+        second_c = None
+        for nc in neighbor_carbons:
+            nc_neighbors = mol.GetAtomWithIdx(nc).GetNeighbors()
+            nc_carbons = [n.GetIdx() for n in nc_neighbors if n.GetSymbol() == 'C' and n.GetIdx() != central_c]
+            if len(nc_carbons) > 0:
+                second_c = nc
+                fourth_c = nc_carbons[0]
+                break
+        
+        if fourth_c is not None:
+            # Constrain one dihedral along the main chain
+            dihedral_dict = {
+                (fourth_c, second_c, central_c, neighbor_carbons[0] if neighbor_carbons[0] != second_c else neighbor_carbons[1]): 120.0,
+            }
+            
+            coords = qdgeo.optimize_mol(
+                mol, dihedral=dihedral_dict, dihedral_k=5.0,
+                repulsion_k=0.1, repulsion_cutoff=3.0,
+                tolerance=1e-6, maxeval=5000, verbose=0
+            )
+            
+            assert coords.shape == (n, 3)
+            
+            # Check dihedral
+            target_c = neighbor_carbons[0] if neighbor_carbons[0] != second_c else neighbor_carbons[1]
+            dihedral = get_dihedral(coords, mol, fourth_c, second_c, central_c, target_c)
+            dihedral_deg = np.rad2deg(dihedral)
+            diff = dihedral_diff(dihedral_deg, 120.0)
+            print(f"Isopentane dihedral: target=120°, actual={dihedral_deg:.2f}°, diff={diff:.2f}°")
+            assert diff < 15.0, f"Isopentane dihedral failed: target=120°, actual={dihedral_deg:.2f}°"
+            
+            write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "isopentane_dihedrals.sdf"), "Isopentane Dihedrals")
+
+
+class TestButadiene:
+    def test_butadiene_conjugated(self):
+        """Test 1,3-butadiene with dihedral constraint across conjugated system."""
+        mol = Chem.MolFromSmiles('C=CC=C')
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        assert len(c_atoms) == 4
+        
+        # Constrain the C=C-C=C dihedral (force s-trans vs s-cis)
+        dihedral_dict = {
+            (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 0.0,  # Force s-cis conformation
+        }
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=10.0,  # Higher force constant for double bonds
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=0
+        )
+        
+        assert coords.shape == (n, 3)
+        
+        # Check dihedral
+        dihedral = get_dihedral(coords, mol, c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3])
+        dihedral_deg = np.rad2deg(dihedral)
+        diff = dihedral_diff(dihedral_deg, 0.0)
+        print(f"Butadiene C=C-C=C: target=0°, actual={dihedral_deg:.2f}°, diff={diff:.2f}°")
+        assert diff < 20.0, f"Butadiene dihedral failed: target=0°, actual={dihedral_deg:.2f}°"
+        
+        write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "butadiene_cis.sdf"), "Butadiene s-cis")
+
+
+class TestPropanediol:
+    def test_propanediol_multiple_oh(self):
+        """Test 1,3-propanediol with dihedral constraints on both C-O bonds."""
+        mol = Chem.MolFromSmiles('OCCCO')
+        mol = Chem.AddHs(mol)
+        n = mol.GetNumAtoms()
+        
+        # Get carbon and oxygen atoms
+        c_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        o_atoms = [i for i in range(n) if mol.GetAtomWithIdx(i).GetSymbol() == 'O']
+        assert len(c_atoms) == 3 and len(o_atoms) == 2
+        
+        # Constrain O-C-C-C and C-C-C-O dihedrals
+        dihedral_dict = {
+            (o_atoms[0], c_atoms[0], c_atoms[1], c_atoms[2]): 60.0,
+            (c_atoms[0], c_atoms[1], c_atoms[2], o_atoms[1]): -60.0,
+        }
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=5.0,
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=0
+        )
+        
+        assert coords.shape == (n, 3)
+        
+        # Check first O-C-C-C dihedral
+        dihedral1 = get_dihedral(coords, mol, o_atoms[0], c_atoms[0], c_atoms[1], c_atoms[2])
+        dihedral1_deg = np.rad2deg(dihedral1)
+        diff1 = dihedral_diff(dihedral1_deg, 60.0)
+        print(f"Propanediol O-C-C-C: target=60°, actual={dihedral1_deg:.2f}°, diff={diff1:.2f}°")
+        assert diff1 < 15.0, f"First O-C-C-C dihedral failed: target=60°, actual={dihedral1_deg:.2f}°"
+        
+        # Check second C-C-C-O dihedral
+        dihedral2 = get_dihedral(coords, mol, c_atoms[0], c_atoms[1], c_atoms[2], o_atoms[1])
+        dihedral2_deg = np.rad2deg(dihedral2)
+        diff2 = dihedral_diff(dihedral2_deg, -60.0)
+        print(f"Propanediol C-C-C-O: target=-60°, actual={dihedral2_deg:.2f}°, diff={diff2:.2f}°")
+        assert diff2 < 15.0, f"Second C-C-C-O dihedral failed: target=-60°, actual={dihedral2_deg:.2f}°"
+        
+        write_sdf(coords, mol, os.path.join(os.path.dirname(__file__), "propanediol_dihedrals.sdf"), "Propanediol Dihedrals")
+
