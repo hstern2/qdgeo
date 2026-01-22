@@ -97,8 +97,6 @@ print(f"Converged: {converged}, Energy: {energy}")
 
 Non-bonded repulsion uses a 1/r¹² potential. The exclusion list automatically excludes 1-2 (bonded), 1-3 (angle), and 1-4 (dihedral) interactions from repulsion.
 
-The optimizer tries multiple random starting points (10 by default) and returns the lowest energy conformer, helping find better local minima.
-
 ## API Reference
 
 ### `qdgeo.optimize(n_atoms, bonds, angles, ...)`
@@ -119,7 +117,6 @@ Low-level optimization function.
 - `linesearch_tolerance`: Line search tolerance (default: 0.5)
 - `maxeval`: Maximum function evaluations (default: 1000)
 - `verbose`: Verbosity level (default: 0)
-- `n_starts`: Number of random starting points to try (default: 10)
 
 **Returns:** `(coords, converged, energy)` tuple
 
@@ -135,7 +132,6 @@ High-level function for optimizing RDKit molecules.
 - `dihedral_k`: Dihedral force constant (default: 5.0)
 - `repulsion_k`: Non-bonded repulsion force constant (default: 0.0, disabled)
 - `repulsion_cutoff`: Repulsion cutoff distance in Angstroms (default: 3.0)
-- `n_starts`: Number of random starting points to try (default: 10)
 - `tolerance`: Convergence tolerance (default: 1e-6)
 - `maxeval`: Maximum function evaluations (default: 5000)
 - `verbose`: If > 0, prints bond lengths, angles, and dihedrals (default: 0)
