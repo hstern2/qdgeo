@@ -10,10 +10,13 @@
 Optimizer::Optimizer(int n, const std::vector<Bond>& bonds, const std::vector<AngleConstraint>& angles,
                      double k_bond, double k_angle,
                      const std::vector<DihedralConstraint>& dihedrals,
-                     double k_dihedral, double k_repulsion, double repulsion_cutoff)
-    : n_(n), bonds_(bonds), angles_(angles), dihedrals_(dihedrals),
+                     double k_dihedral, double k_repulsion, double repulsion_cutoff,
+                     const std::vector<PlanarityConstraint>& planarities,
+                     double k_planarity)
+    : n_(n), bonds_(bonds), angles_(angles), dihedrals_(dihedrals), planarities_(planarities),
       k_bond_(k_bond), k_angle_(k_angle), k_dihedral_(k_dihedral),
       k_repulsion_(k_repulsion), repulsion_cutoff_(repulsion_cutoff),
+      k_planarity_(k_planarity),
       rng_(std::random_device{}()) {
     build_bond_graph();
     build_exclusions();
@@ -147,6 +150,21 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
         r[i4] += scale * g4.x; r[i4+1] += scale * g4.y; r[i4+2] += scale * g4.z;
     }
     
+    // Planarity contributions (out-of-plane distance)
+    for (const auto& p : opt->planarities_) {
+        Cartesian g0, g1, g2, g3;
+        double dist = NormalDistanceGradient(coords[p.center], coords[p.a1], coords[p.a2], coords[p.a3],
+                                             g0, g1, g2, g3);
+        e += 0.5 * opt->k_planarity_ * dist * dist;
+        
+        double scale = opt->k_planarity_ * dist;
+        int i0 = p.center * 3, i1 = p.a1 * 3, i2 = p.a2 * 3, i3 = p.a3 * 3;
+        r[i0] += scale * g0.x; r[i0+1] += scale * g0.y; r[i0+2] += scale * g0.z;
+        r[i1] += scale * g1.x; r[i1+1] += scale * g1.y; r[i1+2] += scale * g1.z;
+        r[i2] += scale * g2.x; r[i2+1] += scale * g2.y; r[i2+2] += scale * g2.z;
+        r[i3] += scale * g3.x; r[i3+1] += scale * g3.y; r[i3+2] += scale * g3.z;
+    }
+    
     // Non-bonded repulsion (only 1-5 and 1-6 interactions)
     if (opt->k_repulsion_ > 0.0) {
         for (int i = 0; i < opt->n_; i++) {
@@ -231,6 +249,10 @@ double Optimizer::energy(const std::vector<Cartesian>& coords) const {
     for (const auto& d : dihedrals_) {
         double phi = Dihedral(coords[d.a1], coords[d.a2], coords[d.a3], coords[d.a4]);
         e += dihedral_energy(phi, d.phi);
+    }
+    for (const auto& p : planarities_) {
+        double dist = NormalDistance(coords[p.center], coords[p.a1], coords[p.a2], coords[p.a3]);
+        e += 0.5 * k_planarity_ * dist * dist;
     }
     if (k_repulsion_ > 0.0) {
         for (int i = 0; i < n_; i++) {

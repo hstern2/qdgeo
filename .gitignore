@@ -30,6 +30,7 @@ Thumbs.db
 
 # Tests
 tests/*.sdf
+test_output/
 
 # uv
 uv.lock

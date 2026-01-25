@@ -25,12 +25,19 @@ struct DihedralConstraint {
     DihedralConstraint(int a1, int a2, int a3, int a4, double phi) : a1(a1), a2(a2), a3(a3), a4(a4), phi(phi) {}
 };
 
+struct PlanarityConstraint {
+    int center, a1, a2, a3;  // center atom should be in plane of a1, a2, a3
+    PlanarityConstraint(int center, int a1, int a2, int a3) : center(center), a1(a1), a2(a2), a3(a3) {}
+};
+
 class Optimizer {
 public:
     Optimizer(int n, const std::vector<Bond>& bonds, const std::vector<AngleConstraint>& angles,
               double k_bond = 1.0, double k_angle = 1.0,
               const std::vector<DihedralConstraint>& dihedrals = std::vector<DihedralConstraint>(),
-              double k_dihedral = 1.0, double k_repulsion = 0.0, double repulsion_cutoff = 3.0);
+              double k_dihedral = 1.0, double k_repulsion = 0.0, double repulsion_cutoff = 3.0,
+              const std::vector<PlanarityConstraint>& planarities = std::vector<PlanarityConstraint>(),
+              double k_planarity = 1.0);
     
     void random_coords(std::vector<Cartesian>& coords, double scale = 2.0);
     bool optimize(std::vector<Cartesian>& coords, double tol = 1e-6,
@@ -43,7 +50,8 @@ private:
     std::vector<Bond> bonds_;
     std::vector<AngleConstraint> angles_;
     std::vector<DihedralConstraint> dihedrals_;
-    double k_bond_, k_angle_, k_dihedral_, k_repulsion_, repulsion_cutoff_;
+    std::vector<PlanarityConstraint> planarities_;
+    double k_bond_, k_angle_, k_dihedral_, k_repulsion_, repulsion_cutoff_, k_planarity_;
     std::vector<std::pair<int, int>> exclusions_;
     std::vector<std::vector<int>> bond_graph_;
     std::mt19937 rng_;
