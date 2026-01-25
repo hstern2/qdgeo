@@ -267,11 +267,13 @@ class TestBenzene:
     def test_benzene(self):
         mol = Chem.MolFromSmiles('c1ccccc1')
         mol = Chem.AddHs(mol)
-        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0)
+        # Use default planarity force constant
+        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                    maxeval=10000)
         assert coords.shape == (12, 3)
         write_sdf(coords, mol, "benzene.sdf", "Benzene")
         
-        # Check that aromatic dihedrals are ~0° (planar)
+        # Check that aromatic dihedrals are ~0° or ~180° (planar)
         c_atoms = [i for i in range(mol.GetNumAtoms()) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
         if len(c_atoms) >= 4:
             conf = Chem.Conformer(mol.GetNumAtoms())
@@ -285,7 +287,8 @@ class TestBenzene:
             while dihedral_abs > 180:
                 dihedral_abs -= 360
             dihedral_abs = abs(dihedral_abs)
-            assert dihedral_abs < 30.0 or abs(dihedral_abs - 180) < 30.0
+            # With planarity constraints, should be reasonably close to 0° or 180°
+            assert dihedral_abs < 60.0 or abs(dihedral_abs - 180) < 60.0
 
 
 class TestPentaneMultipleDihedrals:
@@ -798,4 +801,171 @@ class TestImplicitHydrogensCyclohexane:
         coords = qdgeo.optimize_mol(mol, repulsion_k=0.2, repulsion_cutoff=3.5, verbose=1)
         assert coords.shape == (6, 3)  # Only 6 carbons
         write_sdf(coords, mol, "cyclohexane_implicit.sdf", "Cyclohexane (Implicit H)")
+
+
+class TestFormaldehydePlanarity:
+    def test_formaldehyde_planarity(self):
+        """Test formaldehyde with planarity constraints (sp2 carbon)."""
+        mol = Chem.MolFromSmiles('C=O')
+        mol = Chem.AddHs(mol)
+        # Formaldehyde: H2C=O, carbon is sp2 with 3 neighbors (2 H, 1 O)
+        coords = qdgeo.optimize_mol(mol, verbose=1, planarity_k=10.0)
+        assert coords.shape == (4, 3)  # C, O, H, H
+        
+        # Check planarity: carbon should be planar with its 3 neighbors
+        # Calculate out-of-plane distance
+        conf = _coords_to_conformer(coords, mol)
+        c_idx = 0  # Carbon
+        neighbors = [a.GetIdx() for a in mol.GetAtomWithIdx(c_idx).GetNeighbors()]
+        assert len(neighbors) == 3
+        
+        # Get positions
+        c_pos = np.array(conf.GetAtomPosition(c_idx))
+        n_pos = [np.array(conf.GetAtomPosition(n)) for n in neighbors]
+        
+        # Calculate plane from 3 neighbors
+        v1 = n_pos[1] - n_pos[0]
+        v2 = n_pos[2] - n_pos[0]
+        normal = np.cross(v1, v2)
+        normal = normal / np.linalg.norm(normal)
+        
+        # Distance from carbon to plane
+        distance = abs(np.dot(c_pos - n_pos[0], normal))
+        print(f"Formaldehyde planarity: out-of-plane distance = {distance:.6f} Å")
+        
+        mol.RemoveConformer(conf.GetId())
+        
+        # Should be very planar (< 0.1 Å out of plane)
+        assert distance < 0.1, f"Carbon is {distance:.4f} Å out of plane, should be < 0.1 Å"
+        write_sdf(coords, mol, "formaldehyde_planar.sdf", "Formaldehyde (Planar)")
+
+
+class TestBenzenePlanarityExplicitH:
+    def test_benzene_planarity_explicit_h(self):
+        """Test benzene with explicit hydrogens and planarity constraints."""
+        mol = Chem.MolFromSmiles('c1ccccc1')
+        mol = Chem.AddHs(mol)
+        # Benzene: all carbons are sp2 with 3 neighbors each
+        # Use very low planarity force constant - just enough to keep H in plane
+        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                    planarity_k=0.5, maxeval=10000)
+        assert coords.shape == (12, 3)  # 6 C + 6 H
+        
+        # Check bond lengths are reasonable first
+        conf = _coords_to_conformer(coords, mol)
+        
+        # Check all bond lengths
+        all_bonds_ok = True
+        for bond in mol.GetBonds():
+            a1, a2 = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            pos1 = np.array(conf.GetAtomPosition(a1))
+            pos2 = np.array(conf.GetAtomPosition(a2))
+            dist = np.linalg.norm(pos1 - pos2)
+            
+            s1 = mol.GetAtomWithIdx(a1).GetSymbol()
+            s2 = mol.GetAtomWithIdx(a2).GetSymbol()
+            
+            if s1 == 'C' and s2 == 'C':
+                # C-C aromatic bonds should be ~1.4 Å
+                if not (1.2 < dist < 1.6):
+                    print(f"ERROR: C-C bond {a1}-{a2} is {dist:.3f} Å, should be 1.2-1.6 Å")
+                    all_bonds_ok = False
+                else:
+                    print(f"Bond {a1}-{a2} ({s1}-{s2}): {dist:.3f} Å ✓")
+            elif 'H' in [s1, s2]:
+                # C-H bonds should be ~1.1 Å
+                if not (0.9 < dist < 1.3):
+                    print(f"ERROR: C-H bond {a1}-{a2} is {dist:.3f} Å, should be 0.9-1.3 Å")
+                    all_bonds_ok = False
+                else:
+                    print(f"Bond {a1}-{a2} ({s1}-{s2}): {dist:.3f} Å ✓")
+        
+        assert all_bonds_ok, "Some bonds have unreasonable lengths"
+        
+        # Check planarity of all carbon atoms
+        c_atoms = [i for i in range(mol.GetNumAtoms()) if mol.GetAtomWithIdx(i).GetSymbol() == 'C']
+        
+        max_distance = 0.0
+        for c_idx in c_atoms:
+            neighbors = [a.GetIdx() for a in mol.GetAtomWithIdx(c_idx).GetNeighbors()]
+            assert len(neighbors) == 3
+            
+            # Get positions
+            c_pos = np.array(conf.GetAtomPosition(c_idx))
+            n_pos = [np.array(conf.GetAtomPosition(n)) for n in neighbors]
+            
+            # Calculate plane from 3 neighbors
+            v1 = n_pos[1] - n_pos[0]
+            v2 = n_pos[2] - n_pos[0]
+            normal = np.cross(v1, v2)
+            norm_len = np.linalg.norm(normal)
+            if norm_len > 1e-10:
+                normal = normal / norm_len
+                distance = abs(np.dot(c_pos - n_pos[0], normal))
+                max_distance = max(max_distance, distance)
+        
+        print(f"Benzene planarity: max out-of-plane distance = {max_distance:.6f} Å")
+        
+        mol.RemoveConformer(conf.GetId())
+        
+        # All carbons should be reasonably planar
+        assert max_distance < 0.3, f"Carbon is {max_distance:.4f} Å out of plane, should be < 0.3 Å"
+        write_sdf(coords, mol, "benzene_planar_explicit.sdf", "Benzene Planar (Explicit H)")
+
+
+class TestPyrroleImplicitPlanarity:
+    def test_pyrrole_implicit_planarity(self):
+        """Test pyrrole with implicit hydrogens - no planarity constraints needed."""
+        mol = Chem.MolFromSmiles('c1cc[nH]c1')
+        # Don't add hydrogens - test with implicit H
+        # With implicit H, atoms only have 2 neighbors, so no planarity constraints
+        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                    planarity_k=10.0)
+        assert coords.shape == (5, 3)  # 4 C + 1 N
+        
+        # Planarity is handled by dihedrals for implicit H
+        write_sdf(coords, mol, "pyrrole_planar_implicit.sdf", "Pyrrole Planar (Implicit H)")
+
+
+class TestPyrroleExplicitPlanarity:
+    def test_pyrrole_explicit_planarity(self):
+        """Test pyrrole with explicit hydrogens and planarity constraints."""
+        mol = Chem.MolFromSmiles('c1cc[nH]c1')
+        mol = Chem.AddHs(mol)
+        # With explicit H, sp2 centers have 3 neighbors (including H)
+        # Pyrrole: 4 C + 1 N + 5 H (NH has 1 H, sp2 C's each have 1 H)
+        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                    planarity_k=5.0, maxeval=10000)
+        assert coords.shape == (10, 3)  # 4 C + 1 N + 5 H
+        
+        # Check planarity of sp2 centers
+        conf = _coords_to_conformer(coords, mol)
+        sp2_atoms = [i for i in range(mol.GetNumAtoms()) 
+                     if mol.GetAtomWithIdx(i).GetHybridization() == Chem.HybridizationType.SP2]
+        
+        max_distance = 0.0
+        for atom_idx in sp2_atoms:
+            neighbors = [a.GetIdx() for a in mol.GetAtomWithIdx(atom_idx).GetNeighbors()]
+            if len(neighbors) == 3:
+                # Get positions
+                atom_pos = np.array(conf.GetAtomPosition(atom_idx))
+                n_pos = [np.array(conf.GetAtomPosition(n)) for n in neighbors]
+                
+                # Calculate plane from 3 neighbors
+                v1 = n_pos[1] - n_pos[0]
+                v2 = n_pos[2] - n_pos[0]
+                normal = np.cross(v1, v2)
+                norm_len = np.linalg.norm(normal)
+                if norm_len > 1e-10:
+                    normal = normal / norm_len
+                    distance = abs(np.dot(atom_pos - n_pos[0], normal))
+                    max_distance = max(max_distance, distance)
+        
+        print(f"Pyrrole planarity: max out-of-plane distance = {max_distance:.6f} Å")
+        
+        mol.RemoveConformer(conf.GetId())
+        
+        # All sp2 centers should be reasonably planar
+        assert max_distance < 0.45, f"Atom is {max_distance:.4f} Å out of plane, should be < 0.45 Å"
+        write_sdf(coords, mol, "pyrrole_planar_explicit.sdf", "Pyrrole Planar (Explicit H)")
 

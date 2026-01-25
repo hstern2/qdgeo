@@ -135,7 +135,8 @@ def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bo
 def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, verbose=0,
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
                  dihedral_k=5.0, repulsion_k=0.1, repulsion_cutoff=3.0, n_starts=10,
-                 template: Optional[Chem.Mol] = None, template_k=5.0):
+                 template: Optional[Chem.Mol] = None, template_k=5.0,
+                 planarity_k=0.5):
     """Optimize molecular geometry using QDGeo.
     
     Args:
@@ -154,6 +155,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         template: Optional RDKit molecule to use as template. Will find maximum substructure match
                   and apply restraints from template geometry (default: None)
         template_k: Force constant for template dihedral restraints (default: 5.0)
+        planarity_k: Force constant for planarity restraints (default: 0.5)
     
     Returns:
         Optimized coordinates array, shape (n_atoms, 3)
@@ -175,8 +177,22 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     
     explicit_dihedrals = {}
     constrained_bonds = set()
-    # No automatic planarity constraints - keep it simple
+    
+    # Add planarity constraints for sp2 centers with exactly 3 neighbors
+    # This keeps the sp2 center in the plane of its 3 neighbors
+    # For aromatic rings with explicit H, this forces H to be coplanar with the ring
     planarities = []
+    for i in range(n):
+        atom = mol.GetAtomWithIdx(i)
+        neighbors = [n.GetIdx() for n in atom.GetNeighbors()]
+        
+        if atom.GetHybridization() == Chem.HybridizationType.SP2 and len(neighbors) == 3:
+            # Atom i should be planar with its three neighbors
+            planarities.append((i, neighbors[0], neighbors[1], neighbors[2]))
+            if verbose > 0:
+                sym = atom.GetSymbol()
+                neighbor_syms = [mol.GetAtomWithIdx(n).GetSymbol() for n in neighbors]
+                print(f"  Planarity: {sym}{i} with {neighbor_syms[0]}{neighbors[0]}, {neighbor_syms[1]}{neighbors[1]}, {neighbor_syms[2]}{neighbors[2]}")
     
     # Apply template restraints if provided
     atom_map = None  # Maps mol atom indices to template atom indices
@@ -193,10 +209,25 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     for bond in mol.GetBonds():
         j, k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
         bond_key = (min(j, k), max(j, k))
-        if bond_key in constrained_bonds or bond.IsInRing():
+        if bond_key in constrained_bonds:
             continue
         
-        # Only add dihedral for rotatable single bonds
+        # For aromatic ring bonds, add 0° dihedral to enforce planarity
+        if bond.IsInRing():
+            atom_j = mol.GetAtomWithIdx(j)
+            atom_k = mol.GetAtomWithIdx(k)
+            if (atom_j.GetHybridization() == Chem.HybridizationType.SP2 and
+                atom_k.GetHybridization() == Chem.HybridizationType.SP2):
+                i, l = _get_dihedral_atoms(mol, j, k)
+                if i is not None and (i, j, k, l) not in explicit_dihedrals:
+                    explicit_dihedrals[(i, j, k, l)] = 0.0  # 0° for planar rings
+                    if verbose > 0:
+                        atom_i = mol.GetAtomWithIdx(i)
+                        atom_l = mol.GetAtomWithIdx(l)
+                        print(f"  Dihedral: {atom_i.GetSymbol()}{i}-{atom_j.GetSymbol()}{j}-{atom_k.GetSymbol()}{k}-{atom_l.GetSymbol()}{l} = 0.0°")
+            continue
+        
+        # Only add dihedral for rotatable single bonds (non-ring)
         if bond.GetBondTypeAsDouble() == 1.0:
             i, l = _get_dihedral_atoms(mol, j, k)
             if i is not None and (i, j, k, l) not in explicit_dihedrals:
@@ -210,7 +241,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     if verbose > 0:
         name = mol.GetProp('_Name') if mol.HasProp('_Name') else 'Unnamed'
         print(f"\nMolecule: {name}")
-        print(f"Atoms: {n}, Bonds: {len(bonds)}, Angles: {len(angles)}, Dihedrals: {len(dihedrals)}")
+        print(f"Atoms: {n}, Bonds: {len(bonds)}, Angles: {len(angles)}, Dihedrals: {len(dihedrals)}, Planarities: {len(planarities)}")
         if template is not None and atom_map is not None:
             print(f"Using template_k={template_k}")
         print()
@@ -220,7 +251,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         bond_force_constant=bond_k, angle_force_constant=angle_k,
         dihedral_force_constant=effective_dihedral_k,
         repulsion_force_constant=repulsion_k, repulsion_cutoff=repulsion_cutoff,
-        planarities=planarities, planarity_force_constant=0.0,  # Not used
+        planarities=planarities, planarity_force_constant=planarity_k,
         tolerance=tolerance, maxeval=maxeval, verbose=verbose, n_starts=n_starts
     )
     

@@ -270,7 +270,7 @@ double NormalDistanceGradient(const Cartesian &r0, const Cartesian &r1,
   const Cartesian duur01 = (Tensor(1) - Tensor(uu,uu))*r01/umag;
   g0 = uu;
   g2 = skew(r31)*duur01;
-  g3 = skew(r21)*duur01;
+  g3 = -skew(r21)*duur01;
   g1 = -(g0+g2+g3);
   return uu*r01;
 }
