@@ -716,3 +716,86 @@ class TestTemplateNoMatch:
         
         assert coords.shape == (mol.GetNumAtoms(), 3)
 
+
+class TestImplicitHydrogensEthane:
+    def test_ethane_implicit_hydrogens(self):
+        """Test ethane with implicit hydrogens (no AddHs call)."""
+        mol = Chem.MolFromSmiles('CC')
+        # Don't add hydrogens - keep them implicit
+        coords = qdgeo.optimize_mol(mol, verbose=1)
+        assert coords.shape == (2, 3)  # Only 2 carbon atoms
+        write_sdf(coords, mol, "ethane_implicit.sdf", "Ethane (Implicit H)")
+
+
+class TestImplicitHydrogensBenzene:
+    def test_benzene_implicit_hydrogens(self):
+        """Test benzene with implicit hydrogens."""
+        mol = Chem.MolFromSmiles('c1ccccc1')
+        # Don't add hydrogens
+        coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0)
+        assert coords.shape == (6, 3)  # Only 6 carbon atoms
+        write_sdf(coords, mol, "benzene_implicit.sdf", "Benzene (Implicit H)")
+
+
+class TestImplicitHydrogensButane:
+    def test_butane_implicit_hydrogens(self):
+        """Test butane with implicit hydrogens."""
+        mol = Chem.MolFromSmiles('CCCC')
+        # Don't add hydrogens
+        coords = qdgeo.optimize_mol(mol, verbose=1)
+        assert coords.shape == (4, 3)  # Only 4 carbon atoms
+        write_sdf(coords, mol, "butane_implicit.sdf", "Butane (Implicit H)")
+
+
+class TestImplicitHydrogensButaneWithDihedral:
+    def test_butane_dihedral_implicit_hydrogens(self):
+        """Test butane with dihedral constraint and implicit hydrogens."""
+        mol = Chem.MolFromSmiles('CCCC')
+        # Don't add hydrogens
+        n = mol.GetNumAtoms()
+        
+        # All atoms are carbons
+        c_atoms = list(range(n))
+        assert len(c_atoms) == 4
+        
+        # Constrain C-C-C-C dihedral to 60 degrees
+        dihedral_dict = {(c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 60.0}
+        
+        coords = qdgeo.optimize_mol(
+            mol, dihedral=dihedral_dict, dihedral_k=5.0,
+            repulsion_k=0.1, repulsion_cutoff=3.0,
+            tolerance=1e-6, maxeval=5000, verbose=1
+        )
+        
+        assert coords.shape == (4, 3)
+        
+        # Check dihedral angle
+        dihedral_angle = get_dihedral(coords, mol, c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3])
+        dihedral_deg = np.rad2deg(dihedral_angle)
+        target_deg = 60.0
+        
+        diff = dihedral_diff(dihedral_deg, target_deg)
+        print(f"Butane (implicit H) dihedral: target={target_deg:.0f}°, actual={dihedral_deg:.2f}°, diff={diff:.2f}°")
+        assert diff < 15.0
+        write_sdf(coords, mol, "butane_dihedral_implicit.sdf", "Butane with Dihedral (Implicit H)")
+
+
+class TestImplicitHydrogensEthanol:
+    def test_ethanol_implicit_hydrogens(self):
+        """Test ethanol with implicit hydrogens."""
+        mol = Chem.MolFromSmiles('CCO')
+        # Don't add hydrogens
+        coords = qdgeo.optimize_mol(mol, verbose=1)
+        assert coords.shape == (3, 3)  # Only C, C, O
+        write_sdf(coords, mol, "ethanol_implicit.sdf", "Ethanol (Implicit H)")
+
+
+class TestImplicitHydrogensCyclohexane:
+    def test_cyclohexane_implicit_hydrogens(self):
+        """Test cyclohexane with implicit hydrogens."""
+        mol = Chem.MolFromSmiles('C1CCCCC1')
+        # Don't add hydrogens
+        coords = qdgeo.optimize_mol(mol, repulsion_k=0.2, repulsion_cutoff=3.5, verbose=1)
+        assert coords.shape == (6, 3)  # Only 6 carbons
+        write_sdf(coords, mol, "cyclohexane_implicit.sdf", "Cyclohexane (Implicit H)")
+
