@@ -53,15 +53,19 @@ int Optimizer::shortest_path(int i, int j) const {
 
 void Optimizer::build_exclusions() {
     exclusions_.clear();
+    repulsion_pairs_.clear();
     for (int i = 0; i < n_; i++) {
         for (int j = i + 1; j < n_; j++) {
             int path_len = shortest_path(i, j);
             if (path_len >= 1 && path_len <= 4) {
                 exclusions_.push_back({i, j});
+            } else if (path_len == 5 || path_len == 6) {
+                repulsion_pairs_.push_back({i, j});
             }
         }
     }
     std::sort(exclusions_.begin(), exclusions_.end());
+    std::sort(repulsion_pairs_.begin(), repulsion_pairs_.end());
 }
 
 double Optimizer::dihedral_energy(double phi, double target_phi) const {
@@ -180,30 +184,22 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
     
     // Non-bonded repulsion (only 1-5 and 1-6 interactions)
     if (opt->k_repulsion_ > 0.0) {
-        for (int i = 0; i < opt->n_; i++) {
-            for (int j = i + 1; j < opt->n_; j++) {
-                std::pair<int, int> pair = {i, j};
-                if (std::binary_search(opt->exclusions_.begin(), opt->exclusions_.end(), pair))
-                    continue;
+        for (const auto& pair : opt->repulsion_pairs_) {
+            int i = pair.first;
+            int j = pair.second;
+            Cartesian diff = coords[i] - coords[j];
+            double d = diff.magnitude();
+            if (d < opt->repulsion_cutoff_ && d > small_val()) {
+                double d2 = d * d;
+                double d6 = d2 * d2 * d2;
+                double d12 = d6 * d6;
+                e += opt->k_repulsion_ / d12;
                 
-                int path_len = opt->shortest_path(i, j);
-                if (path_len != 5 && path_len != 6)
-                    continue;
-                
-                Cartesian diff = coords[i] - coords[j];
-                double d = diff.magnitude();
-                if (d < opt->repulsion_cutoff_ && d > small_val()) {
-                    double d2 = d * d;
-                    double d6 = d2 * d2 * d2;
-                    double d12 = d6 * d6;
-                    e += opt->k_repulsion_ / d12;
-                    
-                    double g_mag = -12.0 * opt->k_repulsion_ / (d12 * d);
-                    Cartesian g = (g_mag / d) * diff;
-                    int i1 = i * 3, i2 = j * 3;
-                    r[i1] += g.x; r[i1+1] += g.y; r[i1+2] += g.z;
-                    r[i2] -= g.x; r[i2+1] -= g.y; r[i2+2] -= g.z;
-                }
+                double g_mag = -12.0 * opt->k_repulsion_ / (d12 * d);
+                Cartesian g = (g_mag / d) * diff;
+                int i1 = i * 3, i2 = j * 3;
+                r[i1] += g.x; r[i1+1] += g.y; r[i1+2] += g.z;
+                r[i2] -= g.x; r[i2+1] -= g.y; r[i2+2] -= g.z;
             }
         }
     }
@@ -245,7 +241,10 @@ bool Optimizer::optimize(std::vector<Cartesian>& coords, double tol, double ls_t
     int conv = conjugate_gradient_minimize(n, x.data(), r.data(), nullptr, tol, ls_tol,
                                            maxeval, verbose, calc_fr, nullptr, this, work.data());
     to_cart(x.data(), n_, coords);
-    translate_to_origin(coords);
+    // Don't translate to origin if coordinate constraints are present (they specify absolute positions)
+    if (coordinates_.empty()) {
+        translate_to_origin(coords);
+    }
     return conv != 0;
 }
 
@@ -268,22 +267,15 @@ double Optimizer::energy(const std::vector<Cartesian>& coords) const {
         e += 0.5 * k_coordinate_ * diff.sq();
     }
     if (k_repulsion_ > 0.0) {
-        for (int i = 0; i < n_; i++) {
-            for (int j = i + 1; j < n_; j++) {
-                std::pair<int, int> pair = {i, j};
-                if (std::binary_search(exclusions_.begin(), exclusions_.end(), pair))
-                    continue;
-                
-                int path_len = shortest_path(i, j);
-                if (path_len == 5 || path_len == 6) {
-                    double d = coords[i].distance(coords[j]);
-                    if (d < repulsion_cutoff_ && d > small_val()) {
-                        double d2 = d * d;
-                        double d6 = d2 * d2 * d2;
-                        double d12 = d6 * d6;
-                        e += k_repulsion_ / d12;
-                    }
-                }
+        for (const auto& pair : repulsion_pairs_) {
+            int i = pair.first;
+            int j = pair.second;
+            double d = coords[i].distance(coords[j]);
+            if (d < repulsion_cutoff_ && d > small_val()) {
+                double d2 = d * d;
+                double d6 = d2 * d2 * d2;
+                double d12 = d6 * d6;
+                e += k_repulsion_ / d12;
             }
         }
     }

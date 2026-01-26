@@ -54,6 +54,7 @@ private:
     std::vector<CoordinateConstraint> coordinates_;
     double k_bond_, k_angle_, k_dihedral_, k_repulsion_, repulsion_cutoff_, k_coordinate_;
     std::vector<std::pair<int, int>> exclusions_;
+    std::vector<std::pair<int, int>> repulsion_pairs_;  // Pairs with path_len 5 or 6
     std::vector<std::vector<int>> bond_graph_;
     std::mt19937 rng_;
     
