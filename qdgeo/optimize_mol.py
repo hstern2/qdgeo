@@ -213,6 +213,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
             continue
         
         # For aromatic ring bonds, add 0° dihedral to enforce planarity
+        # BUT only if all 4 atoms are in the SAME ring
         if bond.IsInRing():
             atom_j = mol.GetAtomWithIdx(j)
             atom_k = mol.GetAtomWithIdx(k)
@@ -220,11 +221,20 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
                 atom_k.GetHybridization() == Chem.HybridizationType.SP2):
                 i, l = _get_dihedral_atoms(mol, j, k)
                 if i is not None and (i, j, k, l) not in explicit_dihedrals:
-                    explicit_dihedrals[(i, j, k, l)] = 0.0  # 0° for planar rings
-                    if verbose > 0:
-                        atom_i = mol.GetAtomWithIdx(i)
-                        atom_l = mol.GetAtomWithIdx(l)
-                        print(f"  Dihedral: {atom_i.GetSymbol()}{i}-{atom_j.GetSymbol()}{j}-{atom_k.GetSymbol()}{k}-{atom_l.GetSymbol()}{l} = 0.0°")
+                    # Check if all 4 atoms (i, j, k, l) are in the same ring
+                    ring_info = mol.GetRingInfo()
+                    atoms_in_same_ring = False
+                    for ring in ring_info.AtomRings():
+                        if i in ring and j in ring and k in ring and l in ring:
+                            atoms_in_same_ring = True
+                            break
+                    
+                    if atoms_in_same_ring:
+                        explicit_dihedrals[(i, j, k, l)] = 0.0  # 0° for planar rings
+                        if verbose > 0:
+                            atom_i = mol.GetAtomWithIdx(i)
+                            atom_l = mol.GetAtomWithIdx(l)
+                            print(f"  Dihedral: {atom_i.GetSymbol()}{i}-{atom_j.GetSymbol()}{j}-{atom_k.GetSymbol()}{k}-{atom_l.GetSymbol()}{l} = 0.0°")
             continue
         
         # Only add dihedral for rotatable single bonds (non-ring)
