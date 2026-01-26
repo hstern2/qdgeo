@@ -136,7 +136,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
                  dihedral_k=5.0, repulsion_k=0.1, repulsion_cutoff=3.0, n_starts=10,
                  template: Optional[Chem.Mol] = None, template_k=5.0,
-                 planarity_k=0.5):
+                 planarity_k=1.5):
     """Optimize molecular geometry using QDGeo.
     
     Args:
@@ -165,83 +165,76 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     bonds = [(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), _get_bond_length(mol, bond))
              for bond in mol.GetBonds()]
     
+    # Get ring information for detecting 5-membered rings
+    ring_info = mol.GetRingInfo()
+    five_membered_rings = [ring for ring in ring_info.AtomRings() if len(ring) == 5]
+    five_membered_atoms = set()
+    for ring in five_membered_rings:
+        for atom_idx in ring:
+            five_membered_atoms.add(atom_idx)
+    
     angles = []
     for i in range(n):
         atom = mol.GetAtomWithIdx(i)
         neighbors = [n.GetIdx() for n in atom.GetNeighbors()]
         if len(neighbors) >= 2:
-            angle_val = ANGLE.get(atom.GetHybridization(), ANGLE[Chem.HybridizationType.SP3])
+            # Check if this is an sp2 center in a 5-membered ring with 3 neighbors
+            is_sp2_in_5ring = (atom.GetHybridization() == Chem.HybridizationType.SP2 and 
+                              len(neighbors) == 3 and i in five_membered_atoms)
+            
             for j in range(len(neighbors)):
                 for k in range(j + 1, len(neighbors)):
+                    # Check if this angle is part of a 5-membered ring
+                    # An angle is in a ring if both neighbor atoms and the center are in the same 5-membered ring
+                    angle_in_5ring = False
+                    if is_sp2_in_5ring:
+                        for ring in five_membered_rings:
+                            if (i in ring and neighbors[j] in ring and neighbors[k] in ring):
+                                angle_in_5ring = True
+                                break
+                    
+                    if angle_in_5ring:
+                        # Ring angle in 5-membered ring: 108°
+                        angle_val = np.deg2rad(108.0)
+                        if verbose > 0:
+                            sym = atom.GetSymbol()
+                            n1_sym = mol.GetAtomWithIdx(neighbors[j]).GetSymbol()
+                            n2_sym = mol.GetAtomWithIdx(neighbors[k]).GetSymbol()
+                            print(f"  Angle (5-ring): {n1_sym}{neighbors[j]}-{sym}{i}-{n2_sym}{neighbors[k]} = 108.0°")
+                    elif is_sp2_in_5ring:
+                        # Non-ring angle for sp2 in 5-membered ring: 126°
+                        angle_val = np.deg2rad(126.0)
+                        if verbose > 0:
+                            sym = atom.GetSymbol()
+                            n1_sym = mol.GetAtomWithIdx(neighbors[j]).GetSymbol()
+                            n2_sym = mol.GetAtomWithIdx(neighbors[k]).GetSymbol()
+                            print(f"  Angle (non-ring): {n1_sym}{neighbors[j]}-{sym}{i}-{n2_sym}{neighbors[k]} = 126.0°")
+                    else:
+                        # Standard angle based on hybridization
+                        angle_val = ANGLE.get(atom.GetHybridization(), ANGLE[Chem.HybridizationType.SP3])
+                    
                     angles.append((neighbors[j], i, neighbors[k], angle_val))
     
     explicit_dihedrals = {}
     constrained_bonds = set()
     
-    # Add planarity constraints for sp2 centers with exactly 3 neighbors
-    # This keeps the sp2 center in the plane of its 3 neighbors
-    # For aromatic rings with explicit H, this forces H to be coplanar with the ring
+    # No planarity constraints (NormalDistance removed)
     planarities = []
-    for i in range(n):
-        atom = mol.GetAtomWithIdx(i)
-        neighbors = [n.GetIdx() for n in atom.GetNeighbors()]
-        
-        if atom.GetHybridization() == Chem.HybridizationType.SP2 and len(neighbors) == 3:
-            # Atom i should be planar with its three neighbors
-            planarities.append((i, neighbors[0], neighbors[1], neighbors[2]))
-            if verbose > 0:
-                sym = atom.GetSymbol()
-                neighbor_syms = [mol.GetAtomWithIdx(n).GetSymbol() for n in neighbors]
-                print(f"  Planarity: {sym}{i} with {neighbor_syms[0]}{neighbors[0]}, {neighbor_syms[1]}{neighbors[1]}, {neighbor_syms[2]}{neighbors[2]}")
     
-    # Apply template restraints if provided
+    # Apply template restraints if provided (targeted dihedral constraints)
     atom_map = None  # Maps mol atom indices to template atom indices
     if template is not None:
         atom_map = _apply_template_restraints(mol, template, explicit_dihedrals, 
                                                constrained_bonds, verbose)
     
+    # Add user-provided dihedral constraints (targeted dihedral constraints)
     if dihedral is not None:
         for (i, j, k, l), angle_deg in dihedral.items():
             if not mol.GetBondBetweenAtoms(j, k).IsInRing():
                 explicit_dihedrals[(i, j, k, l)] = np.deg2rad(angle_deg)
                 constrained_bonds.add((min(j, k), max(j, k)))
     
-    for bond in mol.GetBonds():
-        j, k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        bond_key = (min(j, k), max(j, k))
-        if bond_key in constrained_bonds:
-            continue
-        
-        # For aromatic ring bonds, add 0° dihedral to enforce planarity
-        # BUT only if all 4 atoms are in the SAME ring
-        if bond.IsInRing():
-            atom_j = mol.GetAtomWithIdx(j)
-            atom_k = mol.GetAtomWithIdx(k)
-            if (atom_j.GetHybridization() == Chem.HybridizationType.SP2 and
-                atom_k.GetHybridization() == Chem.HybridizationType.SP2):
-                i, l = _get_dihedral_atoms(mol, j, k)
-                if i is not None and (i, j, k, l) not in explicit_dihedrals:
-                    # Check if all 4 atoms (i, j, k, l) are in the same ring
-                    ring_info = mol.GetRingInfo()
-                    atoms_in_same_ring = False
-                    for ring in ring_info.AtomRings():
-                        if i in ring and j in ring and k in ring and l in ring:
-                            atoms_in_same_ring = True
-                            break
-                    
-                    if atoms_in_same_ring:
-                        explicit_dihedrals[(i, j, k, l)] = 0.0  # 0° for planar rings
-                        if verbose > 0:
-                            atom_i = mol.GetAtomWithIdx(i)
-                            atom_l = mol.GetAtomWithIdx(l)
-                            print(f"  Dihedral: {atom_i.GetSymbol()}{i}-{atom_j.GetSymbol()}{j}-{atom_k.GetSymbol()}{k}-{atom_l.GetSymbol()}{l} = 0.0°")
-            continue
-        
-        # Only add dihedral for rotatable single bonds (non-ring)
-        if bond.GetBondTypeAsDouble() == 1.0:
-            i, l = _get_dihedral_atoms(mol, j, k)
-            if i is not None and (i, j, k, l) not in explicit_dihedrals:
-                explicit_dihedrals[(i, j, k, l)] = np.deg2rad(180.0)
+    # No automatic dihedral constraints for aromatic rings or rotatable bonds
     
     dihedrals = [(i, j, k, l, phi) for (i, j, k, l), phi in explicit_dihedrals.items()]
     
@@ -251,7 +244,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     if verbose > 0:
         name = mol.GetProp('_Name') if mol.HasProp('_Name') else 'Unnamed'
         print(f"\nMolecule: {name}")
-        print(f"Atoms: {n}, Bonds: {len(bonds)}, Angles: {len(angles)}, Dihedrals: {len(dihedrals)}, Planarities: {len(planarities)}")
+        print(f"Atoms: {n}, Bonds: {len(bonds)}, Angles: {len(angles)}, Dihedrals: {len(dihedrals)}")
         if template is not None and atom_map is not None:
             print(f"Using template_k={template_k}")
         print()

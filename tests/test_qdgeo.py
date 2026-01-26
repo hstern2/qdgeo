@@ -929,20 +929,90 @@ class TestPyrroleImplicitPlanarity:
 
 class TestPyrroleExplicitPlanarity:
     def test_pyrrole_explicit_planarity(self):
-        """Test pyrrole with explicit hydrogens and planarity constraints."""
+        """Test pyrrole with explicit hydrogens - verify 120° angles and planarity."""
         mol = Chem.MolFromSmiles('c1cc[nH]c1')
         mol = Chem.AddHs(mol)
         # With explicit H, sp2 centers have 3 neighbors (including H)
         # Pyrrole: 4 C + 1 N + 5 H (NH has 1 H, sp2 C's each have 1 H)
         coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
-                                    planarity_k=5.0, maxeval=10000)
+                                    maxeval=10000)
         assert coords.shape == (10, 3)  # 4 C + 1 N + 5 H
         
-        # Check planarity of sp2 centers
         conf = _coords_to_conformer(coords, mol)
+        
+        # Check that angle restraints are correctly applied to sp2 centers with explicit hydrogens
+        # For sp2 centers in 5-membered rings: ring angles = 108°, non-ring angles = 126°
+        # For other sp2 centers: all angles = 120°
         sp2_atoms = [i for i in range(mol.GetNumAtoms()) 
                      if mol.GetAtomWithIdx(i).GetHybridization() == Chem.HybridizationType.SP2]
         
+        # Get ring information
+        ring_info = mol.GetRingInfo()
+        five_membered_rings = [ring for ring in ring_info.AtomRings() if len(ring) == 5]
+        five_membered_atoms = set()
+        for ring in five_membered_rings:
+            for atom_idx in ring:
+                five_membered_atoms.add(atom_idx)
+        
+        max_h_angle_error = 0.0
+        h_angles_checked = 0
+        
+        for atom_idx in sp2_atoms:
+            atom = mol.GetAtomWithIdx(atom_idx)
+            neighbors = [a.GetIdx() for a in atom.GetNeighbors()]
+            
+            if len(neighbors) == 3:
+                # Check if this is in a 5-membered ring
+                is_in_5ring = atom_idx in five_membered_atoms
+                
+                # Find the hydrogen neighbor
+                h_neighbors = [n for n in neighbors if mol.GetAtomWithIdx(n).GetSymbol() == 'H']
+                
+                if len(h_neighbors) == 1:
+                    h_idx = h_neighbors[0]
+                    # Check angles involving the hydrogen
+                    for other_neighbor in neighbors:
+                        if other_neighbor == h_idx:
+                            continue
+                        
+                        # Calculate angle: other_neighbor - atom_idx - h_idx
+                        pos_center = np.array(conf.GetAtomPosition(atom_idx))
+                        pos_other = np.array(conf.GetAtomPosition(other_neighbor))
+                        pos_h = np.array(conf.GetAtomPosition(h_idx))
+                        
+                        v1 = pos_other - pos_center
+                        v2 = pos_h - pos_center
+                        
+                        # Calculate angle
+                        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+                        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+                        angle_rad = np.arccos(cos_angle)
+                        angle_deg = np.rad2deg(angle_rad)
+                        
+                        # Determine target angle
+                        if is_in_5ring:
+                            # For sp2 in 5-membered ring, angles involving H should be 126°
+                            target_angle = 126.0
+                        else:
+                            # For other sp2 centers, angles should be 120°
+                            target_angle = 120.0
+                        
+                        error = abs(angle_deg - target_angle)
+                        max_h_angle_error = max(max_h_angle_error, error)
+                        h_angles_checked += 1
+                        
+                        other_sym = mol.GetAtomWithIdx(other_neighbor).GetSymbol()
+                        print(f"  Angle at sp2 {atom.GetSymbol()}{atom_idx}: "
+                              f"{other_sym}{other_neighbor}-{atom.GetSymbol()}{atom_idx}-H{h_idx} = "
+                              f"{angle_deg:.2f}° (target: {target_angle}°, error: {error:.2f}°)")
+        
+        print(f"Pyrrole H angles: checked {h_angles_checked} angles involving hydrogens, max error = {max_h_angle_error:.2f}°")
+        
+        # For 5-membered rings, angles involving hydrogens should be 126° (not 120°)
+        # Accept angles within 1° of target (126° for 5-membered rings, 120° for others)
+        assert max_h_angle_error < 1.0, f"Some angles involving hydrogens deviate from target by more than 1° (max error: {max_h_angle_error:.2f}°)"
+        
+        # Check planarity of sp2 centers (hydrogens should be in plane of ring)
         max_distance = 0.0
         for atom_idx in sp2_atoms:
             neighbors = [a.GetIdx() for a in mol.GetAtomWithIdx(atom_idx).GetNeighbors()]
