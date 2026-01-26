@@ -54,9 +54,29 @@ int Optimizer::shortest_path(int i, int j) const {
 void Optimizer::build_exclusions() {
     exclusions_.clear();
     repulsion_pairs_.clear();
+    
+    // Compute all shortest paths efficiently using BFS from each node
+    // This is O(n²) instead of O(n³) by reusing BFS results
     for (int i = 0; i < n_; i++) {
+        // BFS from node i to find distances to all other nodes
+        std::vector<int> dist(n_, -1);
+        std::vector<int> queue;
+        dist[i] = 0;
+        queue.push_back(i);
+        
+        for (size_t idx = 0; idx < queue.size(); idx++) {
+            int u = queue[idx];
+            for (int v : bond_graph_[u]) {
+                if (dist[v] == -1) {
+                    dist[v] = dist[u] + 1;
+                    queue.push_back(v);
+                }
+            }
+        }
+        
+        // Process all pairs starting from i
         for (int j = i + 1; j < n_; j++) {
-            int path_len = shortest_path(i, j);
+            int path_len = dist[j];
             if (path_len >= 1 && path_len <= 4) {
                 exclusions_.push_back({i, j});
             } else if (path_len == 5 || path_len == 6) {
@@ -64,6 +84,7 @@ void Optimizer::build_exclusions() {
             }
         }
     }
+    
     std::sort(exclusions_.begin(), exclusions_.end());
     std::sort(repulsion_pairs_.begin(), repulsion_pairs_.end());
 }
