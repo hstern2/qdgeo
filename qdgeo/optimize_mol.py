@@ -4,6 +4,7 @@ import numpy as np
 from typing import Optional
 from rdkit import Chem
 from rdkit.Chem import rdMolAlign, rdMolTransforms
+from rdkit.Chem import rdFMCS
 from . import optimize
 
 BOND_LENGTHS = {
@@ -50,18 +51,77 @@ def _get_dihedral_atoms(mol, j, k):
     return None, None
 
 
-def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bonds, verbose):
-    """Apply dihedral restraints from template molecule using substructure match.
+def _find_mcs_mapping(mol, template, verbose):
+    """Find maximum common substructure (MCS) between mol and template and return atom mapping.
+    
+    Args:
+        mol: Target molecule
+        template: Template molecule
+        verbose: Verbosity level
+    
+    Returns:
+        atom_map: Dictionary mapping mol atom indices to template atom indices (or None if no match)
+    """
+    # Find MCS between mol and template
+    mcs_params = rdFMCS.MCSParameters()
+    mcs_params.AtomCompareParameters.MatchValences = False
+    mcs_params.AtomCompareParameters.RingMatchesRingOnly = False
+    mcs_params.BondCompareParameters.RingMatchesRingOnly = False
+    mcs_params.BondCompareParameters.CompleteRingsOnly = False
+    
+    mcs_result = rdFMCS.FindMCS([mol, template], mcs_params)
+    
+    if mcs_result.numAtoms < 2:
+        if verbose > 0:
+            print("Warning: MCS has fewer than 2 atoms, skipping template restraints")
+        return None
+    
+    # Create MCS molecule from SMARTS
+    mcs_mol = Chem.MolFromSmarts(mcs_result.smartsString)
+    if mcs_mol is None:
+        if verbose > 0:
+            print("Warning: Could not create MCS molecule from SMARTS, skipping template restraints")
+        return None
+    
+    # Find matches of MCS in both molecules
+    mol_matches = mol.GetSubstructMatches(mcs_mol)
+    template_matches = template.GetSubstructMatches(mcs_mol)
+    
+    if not mol_matches or not template_matches:
+        if verbose > 0:
+            print("Warning: Could not find MCS matches in molecules, skipping template restraints")
+        return None
+    
+    # Use first match (could be improved to find best match)
+    mol_match = mol_matches[0]
+    template_match = template_matches[0]
+    
+    # Create mapping: mol_idx -> template_idx
+    atom_map = {}
+    for mcs_idx, (mol_idx, template_idx) in enumerate(zip(mol_match, template_match)):
+        atom_map[mol_idx] = template_idx
+    
+    if verbose > 0:
+        print(f"\nMCS template restraints: Found MCS with {len(atom_map)} atoms")
+        print(f"  Atom mapping (mol -> template): {sorted(atom_map.items())}")
+    
+    return atom_map
+
+
+def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bonds, 
+                               bond_lengths, verbose):
+    """Apply restraints from template molecule using MCS matching.
     
     Args:
         mol: Target molecule
         template: Template molecule with conformer
         explicit_dihedrals: Dictionary to populate with dihedral restraints (modified in place)
-        constrained_bonds: Set of bonds with dihedral constraints (modified in place)
+        constrained_bonds: Set of bonds with constraints (modified in place)
+        bond_lengths: Dictionary mapping (atom1, atom2) -> target length (modified in place)
         verbose: Verbosity level
     
     Returns:
-        atom_map: Tuple mapping mol atom indices to template atom indices (or None if no match)
+        atom_map: Dictionary mapping mol atom indices to template atom indices (or None if no match)
     """
     # Check if template has a conformer
     if template.GetNumConformers() == 0:
@@ -69,48 +129,96 @@ def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bo
             print("Warning: Template has no conformer, skipping template restraints")
         return None
     
-    # Find substructure match (template in mol)
-    # Try with and without useChirality for better matching
-    match = mol.GetSubstructMatch(template)
-    
-    if not match:
-        # Try matching without explicit hydrogens consideration
-        # Create query molecule from template
-        match = mol.GetSubstructMatch(template, useChirality=False)
-    
-    if not match:
-        if verbose > 0:
-            print("Warning: Could not find template as substructure in molecule, skipping template restraints")
+    # Find MCS and atom mapping
+    atom_map = _find_mcs_mapping(mol, template, verbose)
+    if atom_map is None:
         return None
-    
-    if verbose > 0:
-        print(f"\nTemplate restraints: Found substructure match with {len(match)} atoms")
-        print(f"  Atom mapping (mol -> template): {list(enumerate(match))}")
     
     # Get template conformer
     template_conf = template.GetConformer()
     
-    # Extract dihedrals from template for all rotatable bonds
+    # Update bond lengths for bonds in MCS to match template
+    num_template_bonds = 0
+    for bond in template.GetBonds():
+        t_j, t_k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        
+        # Check if both atoms are in the mapping
+        if t_j not in atom_map.values() or t_k not in atom_map.values():
+            continue
+        
+        # Find corresponding atoms in mol (reverse mapping)
+        mol_j = None
+        mol_k = None
+        for mol_idx, template_idx in atom_map.items():
+            if template_idx == t_j:
+                mol_j = mol_idx
+            if template_idx == t_k:
+                mol_k = mol_idx
+        
+        if mol_j is None or mol_k is None:
+            continue
+        
+        # Calculate bond length from template
+        t_pos_j = template_conf.GetAtomPosition(t_j)
+        t_pos_k = template_conf.GetAtomPosition(t_k)
+        template_bond_length = np.linalg.norm(np.array([t_pos_j.x, t_pos_j.y, t_pos_j.z]) - 
+                                              np.array([t_pos_k.x, t_pos_k.y, t_pos_k.z]))
+        
+        # Update bond length constraint
+        bond_key = (min(mol_j, mol_k), max(mol_j, mol_k))
+        bond_lengths[bond_key] = template_bond_length
+        num_template_bonds += 1
+        
+        if verbose > 0:
+            mol_sym_j = mol.GetAtomWithIdx(mol_j).GetSymbol()
+            mol_sym_k = mol.GetAtomWithIdx(mol_k).GetSymbol()
+            print(f"  Template bond: {mol_sym_j}{mol_j}-{mol_sym_k}{mol_k} = {template_bond_length:.3f} Å")
+    
+    # Extract dihedrals from template for rotatable bonds in MCS
     num_template_dihedrals = 0
     for bond in template.GetBonds():
         t_j, t_k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
         
-        # Skip ring bonds in template
+        # Check if both atoms are in the mapping
+        if t_j not in atom_map.values() or t_k not in atom_map.values():
+            continue
+        
+        # Skip ring bonds
         if bond.IsInRing():
             continue
         
-        # Find the corresponding atoms in mol
-        mol_j = match[t_j]
-        mol_k = match[t_k]
+        # Find corresponding atoms in mol
+        mol_j = None
+        mol_k = None
+        for mol_idx, template_idx in atom_map.items():
+            if template_idx == t_j:
+                mol_j = mol_idx
+            if template_idx == t_k:
+                mol_k = mol_idx
+        
+        if mol_j is None or mol_k is None:
+            continue
         
         # Get dihedral atoms in template
         t_i, t_l = _get_dihedral_atoms(template, t_j, t_k)
-        if t_i is None:
+        if t_i is None or t_l is None:
             continue
         
-        # Map to mol indices
-        mol_i = match[t_i]
-        mol_l = match[t_l]
+        # Check if all four atoms are in mapping
+        if (t_i not in atom_map.values() or t_l not in atom_map.values()):
+            continue
+        
+        # Find corresponding atoms in mol
+        mol_i = None
+        mol_l = None
+        for mol_idx, template_idx in atom_map.items():
+            if template_idx == t_i:
+                mol_i = mol_idx
+            if template_idx == t_l:
+                mol_l = mol_idx
+        
+        if mol_i is None or mol_l is None:
+            continue
         
         # Calculate dihedral angle from template conformer
         template_dihedral_deg = rdMolTransforms.GetDihedralDeg(template_conf, t_i, t_j, t_k, t_l)
@@ -127,16 +235,16 @@ def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bo
             print(f"  Template dihedral: {'-'.join(mol_syms)} ({mol_i}, {mol_j}, {mol_k}, {mol_l}): {template_dihedral_deg:.2f}°")
     
     if verbose > 0:
-        print(f"  Total template dihedrals applied: {num_template_dihedrals}\n")
+        print(f"  Total template bonds: {num_template_bonds}, dihedrals: {num_template_dihedrals}\n")
     
-    return match
+    return atom_map
 
 
 def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, verbose=0,
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
                  dihedral_k=5.0, repulsion_k=0.1, repulsion_cutoff=3.0, n_starts=10,
-                 template: Optional[Chem.Mol] = None, template_k=5.0,
-                 planarity_k=1.5):
+                 template: Optional[Chem.Mol] = None, 
+                 template_coordinate_k=10.0):
     """Optimize molecular geometry using QDGeo.
     
     Args:
@@ -154,14 +262,24 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         n_starts: Number of random starting points to try (default: 10)
         template: Optional RDKit molecule to use as template. Will find maximum substructure match
                   and apply restraints from template geometry (default: None)
-        template_k: Force constant for template dihedral restraints (default: 5.0)
-        planarity_k: Force constant for planarity restraints (default: 0.5)
+        template_coordinate_k: Force constant for template coordinate restraints (MCS atoms to template positions) (default: 10.0)
     
     Returns:
         Optimized coordinates array, shape (n_atoms, 3)
     """
     n = mol.GetNumAtoms()
     
+    # Find MCS mapping if template provided
+    atom_map = None  # Maps mol atom indices to template atom indices
+    if template is not None:
+        # Check if template has a conformer
+        if template.GetNumConformers() == 0:
+            if verbose > 0:
+                print("Warning: Template has no conformer, skipping template restraints")
+        else:
+            atom_map = _find_mcs_mapping(mol, template, verbose)
+    
+    # Create bonds list
     bonds = [(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), _get_bond_length(mol, bond))
              for bond in mol.GetBonds()]
     
@@ -218,14 +336,22 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     explicit_dihedrals = {}
     constrained_bonds = set()
     
-    # No planarity constraints (NormalDistance removed)
-    planarities = []
+    # Coordinate constraints for MCS atoms (to restrain them to template positions)
+    coordinate_constraints = []
     
-    # Apply template restraints if provided (targeted dihedral constraints)
-    atom_map = None  # Maps mol atom indices to template atom indices
-    if template is not None:
-        atom_map = _apply_template_restraints(mol, template, explicit_dihedrals, 
-                                               constrained_bonds, verbose)
+    # Apply template coordinate restraints if provided
+    if template is not None and atom_map is not None:
+        # Apply coordinate restraints for MCS atoms to template positions
+        template_conf = template.GetConformer()
+        num_template_coords = 0
+        
+        for mol_idx, template_idx in atom_map.items():
+            t_pos = template_conf.GetAtomPosition(template_idx)
+            coordinate_constraints.append((mol_idx, t_pos.x, t_pos.y, t_pos.z))
+            num_template_coords += 1
+        
+        if verbose > 0:
+            print(f"  Template coordinate restraints: {num_template_coords} atoms\n")
     
     # Add user-provided dihedral constraints (targeted dihedral constraints)
     if dihedral is not None:
@@ -238,23 +364,20 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     
     dihedrals = [(i, j, k, l, phi) for (i, j, k, l), phi in explicit_dihedrals.items()]
     
-    # Use template_k if template provided, otherwise use dihedral_k
-    effective_dihedral_k = template_k if (template is not None and atom_map is not None) else dihedral_k
-    
     if verbose > 0:
         name = mol.GetProp('_Name') if mol.HasProp('_Name') else 'Unnamed'
         print(f"\nMolecule: {name}")
         print(f"Atoms: {n}, Bonds: {len(bonds)}, Angles: {len(angles)}, Dihedrals: {len(dihedrals)}")
         if template is not None and atom_map is not None:
-            print(f"Using template_k={template_k}")
+            print(f"Template coordinate restraints: {len(coordinate_constraints)} atoms")
         print()
     
     coords, converged, energy = optimize(
         n_atoms=n, bonds=bonds, angles=angles, dihedrals=dihedrals,
         bond_force_constant=bond_k, angle_force_constant=angle_k,
-        dihedral_force_constant=effective_dihedral_k,
+        dihedral_force_constant=dihedral_k,
         repulsion_force_constant=repulsion_k, repulsion_cutoff=repulsion_cutoff,
-        planarities=planarities, planarity_force_constant=planarity_k,
+        coordinates=coordinate_constraints, coordinate_force_constant=template_coordinate_k,
         tolerance=tolerance, maxeval=maxeval, verbose=verbose, n_starts=n_starts
     )
     

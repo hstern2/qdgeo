@@ -51,24 +51,24 @@ PYBIND11_MODULE(_qdgeo, m) {
         .def_readwrite("atom4", &DihedralConstraint::a4)
         .def_readwrite("ideal_dihedral", &DihedralConstraint::phi);
     
-    py::class_<PlanarityConstraint>(m, "Planarity")
-        .def(py::init<int, int, int, int>())
-        .def_readwrite("center", &PlanarityConstraint::center)
-        .def_readwrite("atom1", &PlanarityConstraint::a1)
-        .def_readwrite("atom2", &PlanarityConstraint::a2)
-        .def_readwrite("atom3", &PlanarityConstraint::a3);
+    py::class_<CoordinateConstraint>(m, "Coordinate")
+        .def(py::init<int, double, double, double>())
+        .def_readwrite("atom", &CoordinateConstraint::atom)
+        .def_readwrite("x", &CoordinateConstraint::x)
+        .def_readwrite("y", &CoordinateConstraint::y)
+        .def_readwrite("z", &CoordinateConstraint::z);
     
     py::class_<Optimizer>(m, "Optimizer")
         .def(py::init<int, const std::vector<Bond>&, const std::vector<AngleConstraint>&, double, double,
                       const std::vector<DihedralConstraint>&, double, double, double,
-                      const std::vector<PlanarityConstraint>&, double>(),
+                      const std::vector<CoordinateConstraint>&, double>(),
              py::arg("n_atoms"), py::arg("bonds"), py::arg("angles"),
              py::arg("bond_force_constant") = 1.0, py::arg("angle_force_constant") = 1.0,
              py::arg("dihedrals") = std::vector<DihedralConstraint>(),
              py::arg("dihedral_force_constant") = 1.0,
              py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0,
-             py::arg("planarities") = std::vector<PlanarityConstraint>(),
-             py::arg("planarity_force_constant") = 1.0)
+             py::arg("coordinates") = std::vector<CoordinateConstraint>(),
+             py::arg("coordinate_force_constant") = 1.0)
         .def("generate_random_coords", [](Optimizer& opt, double scale = 2.0) {
             std::vector<Cartesian> coords;
             opt.random_coords(coords, scale);
@@ -99,8 +99,8 @@ PYBIND11_MODULE(_qdgeo, m) {
                                   int maxeval, int verbose,
                                   const std::vector<std::tuple<int, int, int, int, double>>& dihedrals,
                                   double k_dihedral, double k_repulsion, double repulsion_cutoff,
-                                  const std::vector<std::tuple<int, int, int, int>>& planarities,
-                                  double k_planarity,
+                                  const std::vector<std::tuple<int, double, double, double>>& coordinates,
+                                  double k_coordinate,
                                   int n_starts) {
         std::vector<Bond> b_vec;
         for (const auto& b : bonds)
@@ -111,12 +111,12 @@ PYBIND11_MODULE(_qdgeo, m) {
         std::vector<DihedralConstraint> d_vec;
         for (const auto& d : dihedrals)
             d_vec.emplace_back(std::get<0>(d), std::get<1>(d), std::get<2>(d), std::get<3>(d), std::get<4>(d));
-        std::vector<PlanarityConstraint> p_vec;
-        for (const auto& p : planarities)
-            p_vec.emplace_back(std::get<0>(p), std::get<1>(p), std::get<2>(p), std::get<3>(p));
+        std::vector<CoordinateConstraint> c_vec;
+        for (const auto& c : coordinates)
+            c_vec.emplace_back(std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c));
         
         Optimizer opt(n, b_vec, a_vec, k_bond, k_angle, d_vec, k_dihedral, k_repulsion, repulsion_cutoff, 
-                      p_vec, k_planarity);
+                      c_vec, k_coordinate);
         
         std::vector<Cartesian> best_coords;
         double best_energy = std::numeric_limits<double>::max();
@@ -146,7 +146,7 @@ PYBIND11_MODULE(_qdgeo, m) {
        py::arg("dihedrals") = std::vector<std::tuple<int, int, int, int, double>>(),
        py::arg("dihedral_force_constant") = 1.0,
        py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0,
-       py::arg("planarities") = std::vector<std::tuple<int, int, int, int>>(),
-       py::arg("planarity_force_constant") = 1.0,
+       py::arg("coordinates") = std::vector<std::tuple<int, double, double, double>>(),
+       py::arg("coordinate_force_constant") = 1.0,
        py::arg("n_starts") = 10);
 }
