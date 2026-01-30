@@ -57,10 +57,10 @@ void Optimizer::build_repulsion_pairs(const std::vector<int>& atomic_numbers) {
         dist[i] = 0;
         queue.push_back(i);
         
-        // BFS with early termination at distance 6
+        // BFS with early termination at distance 5
         for (size_t idx = 0; idx < queue.size(); idx++) {
             int u = queue[idx];
-            if (dist[u] >= 6) continue;  // Don't explore beyond distance 6
+            if (dist[u] >= 5) continue;  // Don't explore beyond distance 5
             for (int v : bond_graph_[u]) {
                 if (dist[v] == -1) {
                     dist[v] = dist[u] + 1;
@@ -70,12 +70,12 @@ void Optimizer::build_repulsion_pairs(const std::vector<int>& atomic_numbers) {
         }
         
         // Only check nodes j > i to avoid duplicates
-        // Include all pairs that are 1-6 or greater (d >= 5) or disconnected (d == -1)
-        // 1-2 (d=1), 1-3 (d=2), 1-4 (d=3), 1-5 (d=4) are excluded; 1-6 (d=5) and beyond are included
+        // Include all pairs that are 1-5 or greater (d >= 4) or disconnected (d == -1)
+        // 1-2 (d=1), 1-3 (d=2), 1-4 (d=3) are excluded; 1-5 (d=4) and beyond are included
         for (int j = i + 1; j < n_; j++) {
             int d = dist[j];
-            if (d == -1 || d >= 5) {
-                // Calculate sigma^2 from sum of vdW radii
+            if (d == -1 || d >= 4) {
+                // Use sum of vdW radii as sigma
                 double sigma = vdw_radius(atomic_numbers[i]) + vdw_radius(atomic_numbers[j]);
                 repulsion_pairs_.emplace_back(i, j, sigma * sigma);
             }
@@ -205,8 +205,9 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
         r[i+2] += k_coord * dz;
     }
     
-    // Non-bonded repulsion (1-6 and beyond) using van der Waals radii
-    // Only applies when d < sigma (sum of vdW radii)
+    // Non-bonded repulsion for 1-5+ pairs
+    // Simple 1/r^12 potential: E = k * (sigma/r)^12
+    // This prevents atoms from overlapping without a hard cutoff
     const double k_rep = opt->k_repulsion_;
     if (k_rep > 0.0) {
         for (const auto& pair : opt->repulsion_pairs_) {
@@ -214,15 +215,14 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
             double dy = coords[pair.i].y - coords[pair.j].y;
             double dz = coords[pair.i].z - coords[pair.j].z;
             double d2 = dx*dx + dy*dy + dz*dz;
-            // Only apply repulsion when d < sigma (i.e., d2 < sigma2)
-            if (d2 < pair.sigma2 && d2 > small * small) {
+            if (d2 > small * small) {
                 // E = k_rep * (sigma/d)^12 = k_rep * sigma2^6 / d2^6
-                double sigma6 = pair.sigma2 * pair.sigma2 * pair.sigma2;
-                double d6 = d2 * d2 * d2;
-                double ratio6 = sigma6 / d6;
-                e += k_rep * ratio6 * ratio6;
+                double ratio2 = pair.sigma2 / d2;
+                double ratio6 = ratio2 * ratio2 * ratio2;
+                double ratio12 = ratio6 * ratio6;
+                e += k_rep * ratio12;
                 // gradient: -12 * k_rep * (sigma/d)^12 / d^2 * diff
-                double g_scale = -12.0 * k_rep * ratio6 * ratio6 / d2;
+                double g_scale = -12.0 * k_rep * ratio12 / d2;
                 int i1 = pair.i * 3, i2 = pair.j * 3;
                 r[i1] += g_scale * dx; r[i1+1] += g_scale * dy; r[i1+2] += g_scale * dz;
                 r[i2] -= g_scale * dx; r[i2+1] -= g_scale * dy; r[i2+2] -= g_scale * dz;
@@ -294,12 +294,10 @@ double Optimizer::energy(const std::vector<Cartesian>& coords) const {
     if (k_repulsion_ > 0.0) {
         for (const auto& pair : repulsion_pairs_) {
             double d2 = (coords[pair.i] - coords[pair.j]).sq();
-            // Only apply repulsion when d < sigma (i.e., d2 < sigma2)
-            if (d2 < pair.sigma2 && d2 > small * small) {
-                // E = k_rep * (sigma/d)^12 = k_rep * sigma2^6 / d2^6
-                double sigma6 = pair.sigma2 * pair.sigma2 * pair.sigma2;
-                double d6 = d2 * d2 * d2;
-                double ratio6 = sigma6 / d6;
+            if (d2 > small * small) {
+                // E = k_rep * (sigma/d)^12
+                double ratio2 = pair.sigma2 / d2;
+                double ratio6 = ratio2 * ratio2 * ratio2;
                 e += k_repulsion_ * ratio6 * ratio6;
             }
         }

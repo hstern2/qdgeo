@@ -117,7 +117,7 @@ def _find_mcs_mapping(mol, template, verbose, debug=False):
 
 def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, verbose=0,
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
-                 dihedral_k=5.0, repulsion_k=0.1, n_starts=10,
+                 dihedral_k=5.0, repulsion_k=0.01, n_starts=10,
                  template: Optional[Chem.Mol] = None, 
                  template_coordinate_k=10.0, debug=False):
     """Optimize molecular geometry using QDGeo.
