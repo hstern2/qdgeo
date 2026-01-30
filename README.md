@@ -5,6 +5,7 @@ QDGeo is a library for optimizing molecular geometries using conjugate gradient 
 ## Installation
 
 ```bash
+# requires a uv venv with python 3.10, 3.11, or 3.12
 uv pip install .
 ```
 
