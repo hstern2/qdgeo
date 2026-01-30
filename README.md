@@ -1,6 +1,6 @@
-# QDGeo: Quick and Dirty Molecular Geometry Optimization
+# QDGeo: Quick & Dirty Molecular Geometry Construction
 
-Optimizes molecular geometries using L-BFGS minimization with harmonic bond/angle terms, dihedral constraints, and van der Waals repulsion.
+Builds molecular 3D geometries using ideal bond lengths and angles with specified torsion angles. No optimization - just direct coordinate construction for maximum speed.
 
 ## Installation
 
@@ -14,30 +14,58 @@ uv pip install .  # requires python 3.10-3.12
 from rdkit import Chem
 import qdgeo
 
-mol = Chem.AddHs(Chem.MolFromSmiles('CCO'))
-coords = qdgeo.optimize_mol(mol)
+# Build with default (anti/180°) torsions
+mol = Chem.AddHs(Chem.MolFromSmiles('CCCC'))
+coords = qdgeo.build_mol(mol)
+
+# Build with specific torsion angles
+c_atoms = [i for i, a in enumerate(mol.GetAtoms()) if a.GetSymbol() == 'C']
+coords = qdgeo.build_mol(mol, torsions={
+    (c_atoms[0], c_atoms[1], c_atoms[2], c_atoms[3]): 60.0  # gauche
+})
 ```
 
 ## API
 
-### `qdgeo.optimize_mol(mol, ...)`
+### `qdgeo.build_mol(mol, torsions=None, verbose=0)`
+
+Build 3D coordinates for an RDKit molecule.
 
 **Parameters:**
-- `mol`: RDKit molecule
-- `bond_k`, `angle_k`, `dihedral_k`: Force constants (defaults: 1.5, 2.0, 5.0)
-- `dihedral`: Dict of `{(i,j,k,l): angle_degrees}` constraints
-- `repulsion_k`: van der Waals repulsion strength (default: 0.01)
-- `n_starts`: Random starting points (default: 10)
-- `tolerance`: Convergence tolerance (default: 1e-6)
-- `maxeval`: Maximum evaluations (default: 5000)
-- `template`: RDKit molecule with conformer for MCS-based coordinate restraints
-- `template_coordinate_k`: Template restraint strength (default: 10.0)
+- `mol`: RDKit molecule (with implicit or explicit hydrogens)
+- `torsions`: Dict mapping `(i, j, k, l)` atom indices to dihedral angles in degrees.
+  The torsion is defined around the j-k bond. Unspecified torsions default to 180° (anti).
+- `verbose`: Verbosity level (0=silent, 1=info)
+
+**Returns:** NumPy array of shape `(n_atoms, 3)` with Cartesian coordinates in Angstroms
+
+### `qdgeo.build_molecule(n_atoms, bonds, angles, torsions, rings)`
+
+Low-level function for direct coordinate construction.
+
+**Parameters:**
+- `n_atoms`: Number of atoms
+- `bonds`: List of `(atom1, atom2, ideal_length)` tuples
+- `angles`: List of `(atom1, center, atom2, angle_rad)` tuples
+- `torsions`: List of `(a1, a2, a3, a4, angle_rad)` tuples
+- `rings`: List of ring atom index lists
 
 **Returns:** NumPy array of shape `(n_atoms, 3)`
 
-### `qdgeo.optimize(n_atoms, bonds, angles, ...)`
+### `qdgeo.MoleculeBuilder`
 
-Low-level function returning `(coords, converged, energy)`.
+Class-based API for fine-grained control:
+
+```python
+builder = qdgeo.MoleculeBuilder(n_atoms=4)
+builder.add_bond(0, 1, 1.54)
+builder.add_bond(1, 2, 1.54)
+builder.add_bond(2, 3, 1.54)
+builder.set_angle(0, 1, 2, 1.91)  # ~109.5° in radians
+builder.set_angle(1, 2, 3, 1.91)
+builder.set_torsion(0, 1, 2, 3, 1.047)  # 60° in radians
+coords = builder.build()
+```
 
 ## Testing
 
@@ -46,3 +74,7 @@ pytest
 ```
 
 Generates SDF files in `test_output/` for visual inspection.
+
+## Performance
+
+The rigid-body approach is deterministic and extremely fast - typically microseconds per molecule regardless of size, since it's just coordinate transforms with no iteration or optimization.

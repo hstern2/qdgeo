@@ -1,4 +1,4 @@
-"""QDGeo: Quick and dirty molecular geometry conformation optimization"""
+"""QDGeo: Quick & dirty molecular geometry construction"""
 
 try:
     import _qdgeo
@@ -14,7 +14,7 @@ except ImportError:
                 break
     import _qdgeo
 
-from _qdgeo import Bond, Angle, Dihedral, Optimizer, optimize
-from .optimize_mol import optimize_mol
+from _qdgeo import MoleculeBuilder, build_molecule
+from .build_mol import build_mol
 
-__all__ = ["Bond", "Angle", "Dihedral", "Optimizer", "optimize", "optimize_mol"]
+__all__ = ["MoleculeBuilder", "build_molecule", "build_mol"]
