@@ -20,7 +20,7 @@ Optimizer::Optimizer(int n, const std::vector<Bond>& bonds, const std::vector<An
       k_coordinate_(k_coordinate),
       rng_(std::random_device{}()) {
     build_bond_graph();
-    build_exclusions();
+    build_repulsion_pairs();
 }
 
 void Optimizer::build_bond_graph() {
@@ -32,33 +32,11 @@ void Optimizer::build_bond_graph() {
     }
 }
 
-int Optimizer::shortest_path(int i, int j) const {
-    if (i == j) return 0;
-    std::vector<int> dist(n_, -1);
-    std::vector<int> queue;
-    dist[i] = 0;
-    queue.push_back(i);
-    for (size_t idx = 0; idx < queue.size(); idx++) {
-        int u = queue[idx];
-        for (int v : bond_graph_[u]) {
-            if (dist[v] == -1) {
-                dist[v] = dist[u] + 1;
-                if (v == j) return dist[v];
-                queue.push_back(v);
-            }
-        }
-    }
-    return -1;
-}
-
-void Optimizer::build_exclusions() {
-    exclusions_.clear();
+void Optimizer::build_repulsion_pairs() {
     repulsion_pairs_.clear();
     
-    // Compute all shortest paths efficiently using BFS from each node
-    // This is O(n²) instead of O(n³) by reusing BFS results
+    // Use BFS from each node to find pairs at distance 5 or 6
     for (int i = 0; i < n_; i++) {
-        // BFS from node i to find distances to all other nodes
         std::vector<int> dist(n_, -1);
         std::vector<int> queue;
         dist[i] = 0;
@@ -74,19 +52,12 @@ void Optimizer::build_exclusions() {
             }
         }
         
-        // Process all pairs starting from i
         for (int j = i + 1; j < n_; j++) {
-            int path_len = dist[j];
-            if (path_len >= 1 && path_len <= 4) {
-                exclusions_.push_back({i, j});
-            } else if (path_len == 5 || path_len == 6) {
+            int d = dist[j];
+            if (d == 5 || d == 6)
                 repulsion_pairs_.push_back({i, j});
-            }
         }
     }
-    
-    std::sort(exclusions_.begin(), exclusions_.end());
-    std::sort(repulsion_pairs_.begin(), repulsion_pairs_.end());
 }
 
 double Optimizer::dihedral_energy(double phi, double target_phi) const {

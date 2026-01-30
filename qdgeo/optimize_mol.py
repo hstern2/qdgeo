@@ -3,7 +3,6 @@
 import numpy as np
 from typing import Optional
 from rdkit import Chem
-from rdkit.Chem import rdMolAlign, rdMolTransforms
 from rdkit.Chem import rdFMCS
 from . import optimize
 
@@ -38,17 +37,6 @@ def _get_bond_length(mol, bond):
         length *= 0.80
     
     return length
-
-
-def _get_dihedral_atoms(mol, j, k):
-    """Get first valid neighbor pair for dihedral (i, j, k, l)."""
-    atom_j = mol.GetAtomWithIdx(j)
-    atom_k = mol.GetAtomWithIdx(k)
-    neighbors_j = [n.GetIdx() for n in atom_j.GetNeighbors() if n.GetIdx() != k]
-    neighbors_k = [n.GetIdx() for n in atom_k.GetNeighbors() if n.GetIdx() != j]
-    if neighbors_j and neighbors_k:
-        return neighbors_j[0], neighbors_k[0]
-    return None, None
 
 
 def _find_mcs_mapping(mol, template, verbose, debug=False):
@@ -123,138 +111,6 @@ def _find_mcs_mapping(mol, template, verbose, debug=False):
     if verbose > 0:
         print(f"\nMCS template restraints: Found MCS with {len(atom_map)} atoms")
         print(f"  Atom mapping (mol -> template): {sorted(atom_map.items())}")
-    
-    return atom_map
-
-
-def _apply_template_restraints(mol, template, explicit_dihedrals, constrained_bonds, 
-                               bond_lengths, verbose):
-    """Apply restraints from template molecule using MCS matching.
-    
-    Args:
-        mol: Target molecule
-        template: Template molecule with conformer
-        explicit_dihedrals: Dictionary to populate with dihedral restraints (modified in place)
-        constrained_bonds: Set of bonds with constraints (modified in place)
-        bond_lengths: Dictionary mapping (atom1, atom2) -> target length (modified in place)
-        verbose: Verbosity level
-    
-    Returns:
-        atom_map: Dictionary mapping mol atom indices to template atom indices (or None if no match)
-    """
-    # Check if template has a conformer
-    if template.GetNumConformers() == 0:
-        if verbose > 0:
-            print("Warning: Template has no conformer, skipping template restraints")
-        return None
-    
-    # Find MCS and atom mapping
-    atom_map = _find_mcs_mapping(mol, template, verbose)
-    if atom_map is None:
-        return None
-    
-    # Get template conformer
-    template_conf = template.GetConformer()
-    
-    # Update bond lengths for bonds in MCS to match template
-    num_template_bonds = 0
-    for bond in template.GetBonds():
-        t_j, t_k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        
-        # Check if both atoms are in the mapping
-        if t_j not in atom_map.values() or t_k not in atom_map.values():
-            continue
-        
-        # Find corresponding atoms in mol (reverse mapping)
-        mol_j = None
-        mol_k = None
-        for mol_idx, template_idx in atom_map.items():
-            if template_idx == t_j:
-                mol_j = mol_idx
-            if template_idx == t_k:
-                mol_k = mol_idx
-        
-        if mol_j is None or mol_k is None:
-            continue
-        
-        # Calculate bond length from template
-        t_pos_j = template_conf.GetAtomPosition(t_j)
-        t_pos_k = template_conf.GetAtomPosition(t_k)
-        template_bond_length = np.linalg.norm(np.array([t_pos_j.x, t_pos_j.y, t_pos_j.z]) - 
-                                              np.array([t_pos_k.x, t_pos_k.y, t_pos_k.z]))
-        
-        # Update bond length constraint
-        bond_key = (min(mol_j, mol_k), max(mol_j, mol_k))
-        bond_lengths[bond_key] = template_bond_length
-        num_template_bonds += 1
-        
-        if verbose > 0:
-            mol_sym_j = mol.GetAtomWithIdx(mol_j).GetSymbol()
-            mol_sym_k = mol.GetAtomWithIdx(mol_k).GetSymbol()
-            print(f"  Template bond: {mol_sym_j}{mol_j}-{mol_sym_k}{mol_k} = {template_bond_length:.3f} Å")
-    
-    # Extract dihedrals from template for rotatable bonds in MCS
-    num_template_dihedrals = 0
-    for bond in template.GetBonds():
-        t_j, t_k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        
-        # Check if both atoms are in the mapping
-        if t_j not in atom_map.values() or t_k not in atom_map.values():
-            continue
-        
-        # Skip ring bonds
-        if bond.IsInRing():
-            continue
-        
-        # Find corresponding atoms in mol
-        mol_j = None
-        mol_k = None
-        for mol_idx, template_idx in atom_map.items():
-            if template_idx == t_j:
-                mol_j = mol_idx
-            if template_idx == t_k:
-                mol_k = mol_idx
-        
-        if mol_j is None or mol_k is None:
-            continue
-        
-        # Get dihedral atoms in template
-        t_i, t_l = _get_dihedral_atoms(template, t_j, t_k)
-        if t_i is None or t_l is None:
-            continue
-        
-        # Check if all four atoms are in mapping
-        if (t_i not in atom_map.values() or t_l not in atom_map.values()):
-            continue
-        
-        # Find corresponding atoms in mol
-        mol_i = None
-        mol_l = None
-        for mol_idx, template_idx in atom_map.items():
-            if template_idx == t_i:
-                mol_i = mol_idx
-            if template_idx == t_l:
-                mol_l = mol_idx
-        
-        if mol_i is None or mol_l is None:
-            continue
-        
-        # Calculate dihedral angle from template conformer
-        template_dihedral_deg = rdMolTransforms.GetDihedralDeg(template_conf, t_i, t_j, t_k, t_l)
-        template_dihedral_rad = np.deg2rad(template_dihedral_deg)
-        
-        # Add restraint
-        dihedral_tuple = (mol_i, mol_j, mol_k, mol_l)
-        explicit_dihedrals[dihedral_tuple] = template_dihedral_rad
-        constrained_bonds.add((min(mol_j, mol_k), max(mol_j, mol_k)))
-        num_template_dihedrals += 1
-        
-        if verbose > 0:
-            mol_syms = [mol.GetAtomWithIdx(idx).GetSymbol() for idx in [mol_i, mol_j, mol_k, mol_l]]
-            print(f"  Template dihedral: {'-'.join(mol_syms)} ({mol_i}, {mol_j}, {mol_k}, {mol_l}): {template_dihedral_deg:.2f}°")
-    
-    if verbose > 0:
-        print(f"  Total template bonds: {num_template_bonds}, dihedrals: {num_template_dihedrals}\n")
     
     return atom_map
 

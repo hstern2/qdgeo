@@ -53,14 +53,12 @@ private:
     std::vector<DihedralConstraint> dihedrals_;
     std::vector<CoordinateConstraint> coordinates_;
     double k_bond_, k_angle_, k_dihedral_, k_repulsion_, repulsion_cutoff_, k_coordinate_;
-    std::vector<std::pair<int, int>> exclusions_;
-    std::vector<std::pair<int, int>> repulsion_pairs_;  // Pairs with path_len 5 or 6
+    std::vector<std::pair<int, int>> repulsion_pairs_;
     std::vector<std::vector<int>> bond_graph_;
     std::mt19937 rng_;
     
-    void build_exclusions();
+    void build_repulsion_pairs();
     void build_bond_graph();
-    int shortest_path(int i, int j) const;
     double dihedral_energy(double phi, double target_phi) const;
     static double calc_fr(int n, const double* x, double* r, void* user);
     static void to_cart(const double* x, int n, std::vector<Cartesian>& coords);
