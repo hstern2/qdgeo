@@ -3,6 +3,8 @@
 #include <pybind11/numpy.h>
 #include <stdexcept>
 #include <limits>
+#include <thread>
+#include <random>
 #include "optimizer.hpp"
 
 namespace py = pybind11;
@@ -115,30 +117,66 @@ PYBIND11_MODULE(_qdgeo, m) {
         for (const auto& c : coordinates)
             c_vec.emplace_back(std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c));
         
-        Optimizer opt(n, b_vec, a_vec, k_bond, k_angle, d_vec, k_dihedral, k_repulsion, repulsion_cutoff, 
-                      c_vec, k_coordinate);
+        // Determine number of threads (use hardware concurrency, but cap at n_starts)
+        unsigned int n_threads = std::min((unsigned int)n_starts, std::thread::hardware_concurrency());
+        if (n_threads == 0) n_threads = 1;
         
-        std::vector<Cartesian> best_coords;
-        double best_energy = std::numeric_limits<double>::max();
-        bool best_conv = false;
+        // Results storage for each thread
+        struct Result {
+            std::vector<Cartesian> coords;
+            double energy = std::numeric_limits<double>::max();
+            bool converged = false;
+        };
+        std::vector<Result> results(n_starts);
         
-        for (int start = 0; start < n_starts; start++) {
+        // Create optimizers for each thread (each needs its own RNG state)
+        // Use a single random_device call + sequential seeds to avoid race conditions
+        std::random_device rd;
+        unsigned int base_seed = rd();
+        std::vector<Optimizer> optimizers;
+        optimizers.reserve(n_starts);
+        for (int i = 0; i < n_starts; i++) {
+            optimizers.emplace_back(n, b_vec, a_vec, k_bond, k_angle, d_vec, k_dihedral, 
+                                   k_repulsion, repulsion_cutoff, c_vec, k_coordinate,
+                                   base_seed + i);  // Unique seed for each
+        }
+        
+        // Worker function for each start
+        auto worker = [&](int start_idx) {
+            Optimizer& opt = optimizers[start_idx];
             std::vector<Cartesian> coords;
             opt.random_coords(coords);
-            int v = (start == 0) ? verbose : 0;
+            int v = (start_idx == 0) ? verbose : 0;
             bool conv = opt.optimize(coords, tol, ls_tol, maxeval, v);
             double energy = opt.energy(coords);
-            
-            if (energy < best_energy) {
-                best_energy = energy;
-                best_coords = coords;
-                best_conv = conv;
+            results[start_idx].coords = std::move(coords);
+            results[start_idx].energy = energy;
+            results[start_idx].converged = conv;
+        };
+        
+        // Launch threads in batches
+        for (unsigned int batch_start = 0; batch_start < (unsigned int)n_starts; batch_start += n_threads) {
+            std::vector<std::thread> threads;
+            unsigned int batch_end = std::min(batch_start + n_threads, (unsigned int)n_starts);
+            for (unsigned int i = batch_start; i < batch_end; i++) {
+                threads.emplace_back(worker, i);
+            }
+            for (auto& t : threads) {
+                t.join();
+            }
+        }
+        
+        // Find best result
+        int best_idx = 0;
+        for (int i = 1; i < n_starts; i++) {
+            if (results[i].energy < results[best_idx].energy) {
+                best_idx = i;
             }
         }
         
         py::array_t<double> result({n, 3});
-        coords_to_numpy(best_coords, result);
-        return std::make_tuple(result, best_conv, best_energy);
+        coords_to_numpy(results[best_idx].coords, result);
+        return std::make_tuple(result, results[best_idx].converged, results[best_idx].energy);
     }, py::arg("n_atoms"), py::arg("bonds"), py::arg("angles"),
        py::arg("bond_force_constant") = 1.0, py::arg("angle_force_constant") = 1.0,
        py::arg("tolerance") = 1e-6, py::arg("linesearch_tolerance") = 0.5,

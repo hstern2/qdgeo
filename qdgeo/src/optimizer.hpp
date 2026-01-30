@@ -38,7 +38,8 @@ public:
               const std::vector<DihedralConstraint>& dihedrals = std::vector<DihedralConstraint>(),
               double k_dihedral = 1.0, double k_repulsion = 0.0, double repulsion_cutoff = 3.0,
               const std::vector<CoordinateConstraint>& coordinates = std::vector<CoordinateConstraint>(),
-              double k_coordinate = 1.0);
+              double k_coordinate = 1.0,
+              unsigned int seed = 0);  // 0 means use random_device
     
     void random_coords(std::vector<Cartesian>& coords, double scale = 2.0);
     bool optimize(std::vector<Cartesian>& coords, double tol = 1e-6,

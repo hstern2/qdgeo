@@ -535,3 +535,69 @@ def test_ethanol_dihedral_low_level():
         assert converged
         assert coords.shape == (9, 3)
         write_sdf(coords, mol, "ethanol_low_level.sdf", "Ethanol Low-Level API")
+
+
+# --- Large Molecule Tests (MW ~400, for profiling) ---
+
+def test_cholesterol():
+    """Test cholesterol (C27H46O, MW ~387) - a steroid hormone."""
+    # Cholesterol SMILES
+    smiles = 'CC(C)CCCC(C)C1CCC2C1(CCC3C2CC=C4C3(CCC(C4)O)C)C'
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    assert mol.GetNumAtoms() == 74  # 27 C + 46 H + 1 O
+    
+    coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                 n_starts=5, maxeval=10000)
+    assert coords.shape == (74, 3)
+    write_sdf(coords, mol, "cholesterol.sdf", "Cholesterol")
+
+
+def test_simvastatin():
+    """Test simvastatin (C25H38O5, MW ~418) - a statin drug."""
+    # Simvastatin SMILES
+    smiles = 'CCC(C)(C)C(=O)OC1CC(C=C2C1C(C(C=C2)C)CCC3CC(CC(=O)O3)O)C'
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    assert mol.GetNumAtoms() == 68  # 25 C + 38 H + 5 O
+    
+    coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                 n_starts=5, maxeval=10000)
+    assert coords.shape == (68, 3)
+    write_sdf(coords, mol, "simvastatin.sdf", "Simvastatin")
+
+
+def test_cortisol():
+    """Test cortisol (C21H30O5, MW ~362) - a stress hormone."""
+    # Cortisol SMILES
+    smiles = 'CC12CCC(=O)C=C1CCC3C2C(CC4(C3CCC4(C(=O)CO)O)C)O'
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    assert mol.GetNumAtoms() == 56  # 21 C + 30 H + 5 O
+    
+    coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                 n_starts=5, maxeval=10000)
+    assert coords.shape == (56, 3)
+    write_sdf(coords, mol, "cortisol.sdf", "Cortisol")
+
+
+def test_tamoxifen():
+    """Test tamoxifen (C26H29NO, MW ~371) - a breast cancer drug."""
+    # Tamoxifen SMILES
+    smiles = 'CC/C(=C(\\c1ccccc1)/c2ccc(cc2)OCCN(C)C)/c3ccccc3'
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    assert mol.GetNumAtoms() == 57  # 26 C + 29 H + 1 N + 1 O
+    
+    coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                 n_starts=5, maxeval=10000)
+    assert coords.shape == (57, 3)
+    write_sdf(coords, mol, "tamoxifen.sdf", "Tamoxifen")
+
+
+def test_caffeine():
+    """Test caffeine (C8H10N4O2, MW ~194) - a smaller reference molecule."""
+    smiles = 'Cn1cnc2c1c(=O)n(c(=O)n2C)C'
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    assert mol.GetNumAtoms() == 24  # 8 C + 10 H + 4 N + 2 O
+    
+    coords = qdgeo.optimize_mol(mol, verbose=1, repulsion_k=0.1, repulsion_cutoff=3.0,
+                                 n_starts=5, maxeval=10000)
+    assert coords.shape == (24, 3)
+    write_sdf(coords, mol, "caffeine.sdf", "Caffeine")

@@ -1,6 +1,7 @@
 #include "optimizer.hpp"
 #include "fns.h"
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 #ifndef M_PI
@@ -12,13 +13,14 @@ Optimizer::Optimizer(int n, const std::vector<Bond>& bonds, const std::vector<An
                      const std::vector<DihedralConstraint>& dihedrals,
                      double k_dihedral, double k_repulsion, double repulsion_cutoff,
                      const std::vector<CoordinateConstraint>& coordinates,
-                     double k_coordinate)
+                     double k_coordinate,
+                     unsigned int seed)
     : n_(n), bonds_(bonds), angles_(angles), dihedrals_(dihedrals),
       coordinates_(coordinates),
       k_bond_(k_bond), k_angle_(k_angle), k_dihedral_(k_dihedral),
       k_repulsion_(k_repulsion), repulsion_cutoff_(repulsion_cutoff),
       k_coordinate_(k_coordinate),
-      rng_(std::random_device{}()) {
+      rng_(seed != 0 ? seed : std::random_device{}()) {
     build_bond_graph();
     build_repulsion_pairs();
 }
@@ -34,16 +36,25 @@ void Optimizer::build_bond_graph() {
 
 void Optimizer::build_repulsion_pairs() {
     repulsion_pairs_.clear();
+    if (n_ == 0) return;
     
-    // Use BFS from each node to find pairs at distance 5 or 6
+    // Reuse vectors across iterations to avoid repeated allocations
+    std::vector<int> dist(n_);
+    std::vector<int> queue;
+    queue.reserve(n_);
+    
     for (int i = 0; i < n_; i++) {
-        std::vector<int> dist(n_, -1);
-        std::vector<int> queue;
+        // Reset distances (only need to reset nodes we visited)
+        std::fill(dist.begin(), dist.end(), -1);
+        queue.clear();
+        
         dist[i] = 0;
         queue.push_back(i);
         
+        // BFS with early termination at distance 6
         for (size_t idx = 0; idx < queue.size(); idx++) {
             int u = queue[idx];
+            if (dist[u] >= 6) continue;  // Don't explore beyond distance 6
             for (int v : bond_graph_[u]) {
                 if (dist[v] == -1) {
                     dist[v] = dist[u] + 1;
@@ -52,6 +63,7 @@ void Optimizer::build_repulsion_pairs() {
             }
         }
         
+        // Only check nodes j > i to avoid duplicates
         for (int j = i + 1; j < n_; j++) {
             int d = dist[j];
             if (d == 5 || d == 6)
@@ -99,35 +111,39 @@ void Optimizer::random_coords(std::vector<Cartesian>& coords, double scale) {
 
 double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
     Optimizer* opt = static_cast<Optimizer*>(user);
-    std::vector<Cartesian> coords;
-    to_cart(x, opt->n_, coords);
-    std::fill(r, r + n, 0.0);
+    // Reinterpret x as array of Cartesian (zero-copy - Cartesian is POD {x,y,z})
+    const Cartesian* coords = reinterpret_cast<const Cartesian*>(x);
+    std::memset(r, 0, n * sizeof(double));
     
     double e = 0.0;
+    const double small = small_val();
     
     // Bond contributions
+    const double k_bond = opt->k_bond_;
     for (const auto& b : opt->bonds_) {
         Cartesian diff = coords[b.a1] - coords[b.a2];
-        double d = diff.magnitude();
+        double d2 = diff.sq();
+        double d = sqrt(d2);
         double delta = d - b.len;
-        e += 0.5 * opt->k_bond_ * delta * delta;
+        e += 0.5 * k_bond * delta * delta;
         
-        if (d > small_val()) {
-            Cartesian g = (opt->k_bond_ * delta / d) * diff;
+        if (d > small) {
+            double g_scale = k_bond * delta / d;
             int i1 = b.a1 * 3, i2 = b.a2 * 3;
-            r[i1] += g.x; r[i1+1] += g.y; r[i1+2] += g.z;
-            r[i2] -= g.x; r[i2+1] -= g.y; r[i2+2] -= g.z;
+            r[i1] += g_scale * diff.x; r[i1+1] += g_scale * diff.y; r[i1+2] += g_scale * diff.z;
+            r[i2] -= g_scale * diff.x; r[i2+1] -= g_scale * diff.y; r[i2+2] -= g_scale * diff.z;
         }
     }
     
     // Angle contributions
+    const double k_angle = opt->k_angle_;
     for (const auto& a : opt->angles_) {
         Cartesian g1, g2, g3;
         double theta = AngleGradient(coords[a.a1], coords[a.a2], coords[a.a3], g1, g2, g3);
         double delta = theta - a.ang;
-        e += 0.5 * opt->k_angle_ * delta * delta;
+        e += 0.5 * k_angle * delta * delta;
         
-        double scale = opt->k_angle_ * delta;
+        double scale = k_angle * delta;
         int i1 = a.a1 * 3, i2 = a.a2 * 3, i3 = a.a3 * 3;
         r[i1] += scale * g1.x; r[i1+1] += scale * g1.y; r[i1+2] += scale * g1.z;
         r[i2] += scale * g2.x; r[i2+1] += scale * g2.y; r[i2+2] += scale * g2.z;
@@ -135,63 +151,62 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
     }
     
     // Dihedral contributions
-    for (const auto& d : opt->dihedrals_) {
+    const double k_dihedral = opt->k_dihedral_;
+    for (const auto& dih : opt->dihedrals_) {
         Cartesian g1, g2, g3, g4;
-        double phi = DihedralGradient(coords[d.a1], coords[d.a2], coords[d.a3], coords[d.a4], g1, g2, g3, g4);
-        e += opt->dihedral_energy(phi, d.phi);
+        double phi = DihedralGradient(coords[dih.a1], coords[dih.a2], coords[dih.a3], coords[dih.a4], g1, g2, g3, g4);
+        e += opt->dihedral_energy(phi, dih.phi);
         
         double cos_phi = cos(phi);
         double sin_phi = sin(phi);
-        double cos_target = cos(d.phi);
+        double cos_target = cos(dih.phi);
         double scale;
         if (fabs(cos_target - 1.0) < 0.01) {
-            double one_minus_cos = 1.0 - cos_phi;
-            scale = opt->k_dihedral_ * one_minus_cos * sin_phi;
+            scale = k_dihedral * (1.0 - cos_phi) * sin_phi;
         } else if (fabs(cos_target + 1.0) < 0.01) {
-            double one_plus_cos = 1.0 + cos_phi;
-            scale = -opt->k_dihedral_ * one_plus_cos * sin_phi;
+            scale = -k_dihedral * (1.0 + cos_phi) * sin_phi;
         } else {
-            double delta = phi - d.phi;
-            scale = opt->k_dihedral_ * sin(2.0 * delta);
+            scale = k_dihedral * sin(2.0 * (phi - dih.phi));
         }
-        int i1 = d.a1 * 3, i2 = d.a2 * 3, i3 = d.a3 * 3, i4 = d.a4 * 3;
+        int i1 = dih.a1 * 3, i2 = dih.a2 * 3, i3 = dih.a3 * 3, i4 = dih.a4 * 3;
         r[i1] += scale * g1.x; r[i1+1] += scale * g1.y; r[i1+2] += scale * g1.z;
         r[i2] += scale * g2.x; r[i2+1] += scale * g2.y; r[i2+2] += scale * g2.z;
         r[i3] += scale * g3.x; r[i3+1] += scale * g3.y; r[i3+2] += scale * g3.z;
         r[i4] += scale * g4.x; r[i4+1] += scale * g4.y; r[i4+2] += scale * g4.z;
     }
     
-    // Coordinate constraint contributions (restrain atoms to target positions)
+    // Coordinate constraint contributions
+    const double k_coord = opt->k_coordinate_;
     for (const auto& c : opt->coordinates_) {
-        Cartesian diff = coords[c.atom] - Cartesian(c.x, c.y, c.z);
-        double dist_sq = diff.sq();
-        e += 0.5 * opt->k_coordinate_ * dist_sq;
-        
-        double scale = opt->k_coordinate_;
+        double dx = coords[c.atom].x - c.x;
+        double dy = coords[c.atom].y - c.y;
+        double dz = coords[c.atom].z - c.z;
+        e += 0.5 * k_coord * (dx*dx + dy*dy + dz*dz);
         int i = c.atom * 3;
-        r[i] += scale * diff.x;
-        r[i+1] += scale * diff.y;
-        r[i+2] += scale * diff.z;
+        r[i] += k_coord * dx;
+        r[i+1] += k_coord * dy;
+        r[i+2] += k_coord * dz;
     }
     
-    // Non-bonded repulsion (only 1-5 and 1-6 interactions)
-    if (opt->k_repulsion_ > 0.0) {
+    // Non-bonded repulsion (1-5 and 1-6 interactions only)
+    const double k_rep = opt->k_repulsion_;
+    if (k_rep > 0.0) {
+        const double cutoff2 = opt->repulsion_cutoff_ * opt->repulsion_cutoff_;
         for (const auto& pair : opt->repulsion_pairs_) {
-            int i = pair.first;
-            int j = pair.second;
-            Cartesian diff = coords[i] - coords[j];
-            double d = diff.magnitude();
-            if (d < opt->repulsion_cutoff_ && d > small_val()) {
-                double d2 = d * d;
+            int i = pair.first, j = pair.second;
+            double dx = coords[i].x - coords[j].x;
+            double dy = coords[i].y - coords[j].y;
+            double dz = coords[i].z - coords[j].z;
+            double d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < cutoff2 && d2 > small * small) {
                 double d6 = d2 * d2 * d2;
                 double d12 = d6 * d6;
-                e += opt->k_repulsion_ / d12;
-                
-                double g_mag = -12.0 * opt->k_repulsion_ / (d12 * d);
-                Cartesian g = (g_mag / d) * diff;
+                e += k_rep / d12;
+                // gradient: -12 * k_rep / d^14 * diff = -12 * k_rep / (d12 * d2) * diff
+                double g_scale = -12.0 * k_rep / (d12 * d2);
                 int i1 = i * 3, i2 = j * 3;
-                r[i1] += g.x; r[i1+1] += g.y; r[i1+2] += g.z;
-                r[i2] -= g.x; r[i2+1] -= g.y; r[i2+2] -= g.z;
+                r[i1] += g_scale * dx; r[i1+1] += g_scale * dy; r[i1+2] += g_scale * dz;
+                r[i2] -= g_scale * dx; r[i2+1] -= g_scale * dy; r[i2+2] -= g_scale * dz;
             }
         }
     }
@@ -202,16 +217,11 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
 
 void Optimizer::to_cart(const double* x, int n, std::vector<Cartesian>& coords) {
     coords.resize(n);
-    for (int i = 0; i < n; i++)
-        coords[i] = Cartesian(x[i*3], x[i*3+1], x[i*3+2]);
+    std::memcpy(coords.data(), x, n * sizeof(Cartesian));
 }
 
 void Optimizer::to_array(const std::vector<Cartesian>& coords, double* x) {
-    for (size_t i = 0; i < coords.size(); i++) {
-        x[i*3] = coords[i].x;
-        x[i*3+1] = coords[i].y;
-        x[i*3+2] = coords[i].z;
-    }
+    std::memcpy(x, coords.data(), coords.size() * sizeof(Cartesian));
 }
 
 static void translate_to_origin(std::vector<Cartesian>& coords) {
@@ -242,6 +252,8 @@ bool Optimizer::optimize(std::vector<Cartesian>& coords, double tol, double ls_t
 
 double Optimizer::energy(const std::vector<Cartesian>& coords) const {
     double e = 0.0;
+    const double small = small_val();
+    
     for (const auto& b : bonds_) {
         double delta = (coords[b.a1] - coords[b.a2]).magnitude() - b.len;
         e += 0.5 * k_bond_ * delta * delta;
@@ -250,24 +262,23 @@ double Optimizer::energy(const std::vector<Cartesian>& coords) const {
         double delta = Angle(coords[a.a1], coords[a.a2], coords[a.a3]) - a.ang;
         e += 0.5 * k_angle_ * delta * delta;
     }
-    for (const auto& d : dihedrals_) {
-        double phi = Dihedral(coords[d.a1], coords[d.a2], coords[d.a3], coords[d.a4]);
-        e += dihedral_energy(phi, d.phi);
+    for (const auto& dih : dihedrals_) {
+        double phi = Dihedral(coords[dih.a1], coords[dih.a2], coords[dih.a3], coords[dih.a4]);
+        e += dihedral_energy(phi, dih.phi);
     }
     for (const auto& c : coordinates_) {
-        Cartesian diff = coords[c.atom] - Cartesian(c.x, c.y, c.z);
-        e += 0.5 * k_coordinate_ * diff.sq();
+        double dx = coords[c.atom].x - c.x;
+        double dy = coords[c.atom].y - c.y;
+        double dz = coords[c.atom].z - c.z;
+        e += 0.5 * k_coordinate_ * (dx*dx + dy*dy + dz*dz);
     }
     if (k_repulsion_ > 0.0) {
+        const double cutoff2 = repulsion_cutoff_ * repulsion_cutoff_;
         for (const auto& pair : repulsion_pairs_) {
-            int i = pair.first;
-            int j = pair.second;
-            double d = coords[i].distance(coords[j]);
-            if (d < repulsion_cutoff_ && d > small_val()) {
-                double d2 = d * d;
+            double d2 = (coords[pair.first] - coords[pair.second]).sq();
+            if (d2 < cutoff2 && d2 > small * small) {
                 double d6 = d2 * d2 * d2;
-                double d12 = d6 * d6;
-                e += k_repulsion_ / d12;
+                e += k_repulsion_ / (d6 * d6);
             }
         }
     }
