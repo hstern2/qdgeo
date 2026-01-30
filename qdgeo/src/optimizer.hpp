@@ -4,7 +4,6 @@
 #include <vector>
 #include <random>
 #include "coord.hpp"
-#include "cgmin.h"
 #include "geograd.hpp"
 
 struct Bond {

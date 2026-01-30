@@ -6,7 +6,7 @@ import os
 import sys
 
 src = os.path.join("qdgeo", "src")
-c_files = [os.path.join(src, f) for f in ["cgmin.c", "fns.c"]]
+c_files = [os.path.join(src, f) for f in ["fns.c"]]
 cpp_files = [os.path.join(src, f) for f in ["python_bindings.cpp", "optimizer.cpp", "geograd.cpp"]]
 
 # Optimization flags - portable across macOS and Linux

@@ -1,4 +1,5 @@
 #include "optimizer.hpp"
+#include "lbfgs.hpp"
 #include "fns.h"
 #include <cmath>
 #include <cstring>
@@ -253,14 +254,15 @@ static void translate_to_origin(std::vector<Cartesian>& coords) {
         c -= centroid;
 }
 
-bool Optimizer::optimize(std::vector<Cartesian>& coords, double tol, double ls_tol,
+bool Optimizer::optimize(std::vector<Cartesian>& coords, double tol, double /* ls_tol */,
                          int maxeval, int verbose) {
     int n = n_ * 3;
-    std::vector<double> x(n), r(n), work(4 * n);
+    std::vector<double> x(n);
     to_array(coords, x.data());
     
-    int conv = conjugate_gradient_minimize(n, x.data(), r.data(), nullptr, tol, ls_tol,
-                                           maxeval, verbose, calc_fr, nullptr, this, work.data());
+    // Use L-BFGS optimizer (faster convergence than conjugate gradient)
+    // History size m=10 is a good default for molecular optimization
+    int conv = lbfgs::minimize(n, x.data(), tol, maxeval, verbose, calc_fr, this, 10);
     to_cart(x.data(), n_, coords);
     // Don't translate to origin if coordinate constraints are present (they specify absolute positions)
     if (coordinates_.empty()) {
