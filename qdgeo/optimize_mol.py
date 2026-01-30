@@ -117,7 +117,7 @@ def _find_mcs_mapping(mol, template, verbose, debug=False):
 
 def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, verbose=0,
                  dihedral: Optional[dict[tuple[int, int, int, int], float]] = None,
-                 dihedral_k=5.0, repulsion_k=0.1, repulsion_cutoff=3.0, n_starts=10,
+                 dihedral_k=5.0, repulsion_k=0.1, n_starts=10,
                  template: Optional[Chem.Mol] = None, 
                  template_coordinate_k=10.0, debug=False):
     """Optimize molecular geometry using QDGeo.
@@ -132,8 +132,7 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
         dihedral: Optional dictionary of dihedral angle constraints.
                   Keys are tuples of 4 atom indices (i, j, k, l), values are target angles in degrees.
         dihedral_k: Dihedral force constant (default: 5.0)
-        repulsion_k: Non-bonded repulsion force constant (default: 0.1)
-        repulsion_cutoff: Repulsion cutoff distance in Angstroms (default: 3.0)
+        repulsion_k: Non-bonded repulsion force constant using van der Waals radii (default: 0.1)
         n_starts: Number of random starting points to try (default: 10)
         template: Optional RDKit molecule to use as template. Will find maximum substructure match
                   and apply restraints from template geometry (default: None)
@@ -243,12 +242,16 @@ def optimize_mol(mol, bond_k=1.5, angle_k=2.0, tolerance=1e-6, maxeval=5000, ver
     if debug:
         print("[DEBUG] Creating optimizer and starting optimization...")
     
+    # Extract atomic numbers from the molecule for vdW radii calculation
+    atomic_numbers = [mol.GetAtomWithIdx(i).GetAtomicNum() for i in range(n)]
+    
     coords, converged, energy = optimize(
         n_atoms=n, bonds=bonds, angles=angles, dihedrals=dihedrals,
         bond_force_constant=bond_k, angle_force_constant=angle_k,
         dihedral_force_constant=dihedral_k,
-        repulsion_force_constant=repulsion_k, repulsion_cutoff=repulsion_cutoff,
+        repulsion_force_constant=repulsion_k,
         coordinates=coordinate_constraints, coordinate_force_constant=template_coordinate_k,
+        atomic_numbers=atomic_numbers,
         tolerance=tolerance, maxeval=maxeval, verbose=verbose, n_starts=n_starts
     )
     

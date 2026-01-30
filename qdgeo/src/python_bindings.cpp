@@ -62,22 +62,24 @@ PYBIND11_MODULE(_qdgeo, m) {
     
     py::class_<Optimizer>(m, "Optimizer")
         .def(py::init<int, const std::vector<Bond>&, const std::vector<AngleConstraint>&, double, double,
-                      const std::vector<DihedralConstraint>&, double, double, double,
-                      const std::vector<CoordinateConstraint>&, double>(),
+                      const std::vector<DihedralConstraint>&, double, double,
+                      const std::vector<CoordinateConstraint>&, double,
+                      const std::vector<int>&>(),
              py::arg("n_atoms"), py::arg("bonds"), py::arg("angles"),
              py::arg("bond_force_constant") = 1.0, py::arg("angle_force_constant") = 1.0,
              py::arg("dihedrals") = std::vector<DihedralConstraint>(),
              py::arg("dihedral_force_constant") = 1.0,
-             py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0,
+             py::arg("repulsion_force_constant") = 0.0,
              py::arg("coordinates") = std::vector<CoordinateConstraint>(),
-             py::arg("coordinate_force_constant") = 1.0)
-        .def("generate_random_coords", [](Optimizer& opt, double scale = 2.0) {
+             py::arg("coordinate_force_constant") = 1.0,
+             py::arg("atomic_numbers") = std::vector<int>())
+        .def("generate_random_coords", [](Optimizer& opt, double scale = 0.0) {
             std::vector<Cartesian> coords;
             opt.random_coords(coords, scale);
             py::array_t<double> result({opt.n_atoms(), 3});
             coords_to_numpy(coords, result);
             return result;
-        }, py::arg("scale") = 2.0)
+        }, py::arg("scale") = 0.0)  // 0 = auto-scale based on n_atoms
         .def("optimize", [](Optimizer& opt, py::array_t<double> coords, double tol,
                             double ls_tol, int maxeval, int verbose) {
             std::vector<Cartesian> cart_coords;
@@ -100,9 +102,10 @@ PYBIND11_MODULE(_qdgeo, m) {
                                   double k_bond, double k_angle, double tol, double ls_tol,
                                   int maxeval, int verbose,
                                   const std::vector<std::tuple<int, int, int, int, double>>& dihedrals,
-                                  double k_dihedral, double k_repulsion, double repulsion_cutoff,
+                                  double k_dihedral, double k_repulsion,
                                   const std::vector<std::tuple<int, double, double, double>>& coordinates,
                                   double k_coordinate,
+                                  const std::vector<int>& atomic_numbers,
                                   int n_starts) {
         std::vector<Bond> b_vec;
         for (const auto& b : bonds)
@@ -137,8 +140,8 @@ PYBIND11_MODULE(_qdgeo, m) {
         optimizers.reserve(n_starts);
         for (int i = 0; i < n_starts; i++) {
             optimizers.emplace_back(n, b_vec, a_vec, k_bond, k_angle, d_vec, k_dihedral, 
-                                   k_repulsion, repulsion_cutoff, c_vec, k_coordinate,
-                                   base_seed + i);  // Unique seed for each
+                                   k_repulsion, c_vec, k_coordinate,
+                                   atomic_numbers, base_seed + i);  // Unique seed for each
         }
         
         // Worker function for each start
@@ -183,8 +186,9 @@ PYBIND11_MODULE(_qdgeo, m) {
        py::arg("maxeval") = 1000, py::arg("verbose") = 0,
        py::arg("dihedrals") = std::vector<std::tuple<int, int, int, int, double>>(),
        py::arg("dihedral_force_constant") = 1.0,
-       py::arg("repulsion_force_constant") = 0.0, py::arg("repulsion_cutoff") = 3.0,
+       py::arg("repulsion_force_constant") = 0.0,
        py::arg("coordinates") = std::vector<std::tuple<int, double, double, double>>(),
        py::arg("coordinate_force_constant") = 1.0,
+       py::arg("atomic_numbers") = std::vector<int>(),
        py::arg("n_starts") = 10);
 }

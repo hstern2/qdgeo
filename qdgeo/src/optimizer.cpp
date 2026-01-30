@@ -11,18 +11,24 @@
 Optimizer::Optimizer(int n, const std::vector<Bond>& bonds, const std::vector<AngleConstraint>& angles,
                      double k_bond, double k_angle,
                      const std::vector<DihedralConstraint>& dihedrals,
-                     double k_dihedral, double k_repulsion, double repulsion_cutoff,
+                     double k_dihedral, double k_repulsion,
                      const std::vector<CoordinateConstraint>& coordinates,
                      double k_coordinate,
+                     const std::vector<int>& atomic_numbers,
                      unsigned int seed)
     : n_(n), bonds_(bonds), angles_(angles), dihedrals_(dihedrals),
       coordinates_(coordinates),
       k_bond_(k_bond), k_angle_(k_angle), k_dihedral_(k_dihedral),
-      k_repulsion_(k_repulsion), repulsion_cutoff_(repulsion_cutoff),
+      k_repulsion_(k_repulsion),
       k_coordinate_(k_coordinate),
       rng_(seed != 0 ? seed : std::random_device{}()) {
     build_bond_graph();
-    build_repulsion_pairs();
+    // Use provided atomic numbers or default to carbon (6)
+    if (atomic_numbers.empty()) {
+        build_repulsion_pairs(std::vector<int>(n_, 6));
+    } else {
+        build_repulsion_pairs(atomic_numbers);
+    }
 }
 
 void Optimizer::build_bond_graph() {
@@ -34,7 +40,7 @@ void Optimizer::build_bond_graph() {
     }
 }
 
-void Optimizer::build_repulsion_pairs() {
+void Optimizer::build_repulsion_pairs(const std::vector<int>& atomic_numbers) {
     repulsion_pairs_.clear();
     if (n_ == 0) return;
     
@@ -64,10 +70,15 @@ void Optimizer::build_repulsion_pairs() {
         }
         
         // Only check nodes j > i to avoid duplicates
+        // Include all pairs that are 1-6 or greater (d >= 5) or disconnected (d == -1)
+        // 1-2 (d=1), 1-3 (d=2), 1-4 (d=3), 1-5 (d=4) are excluded; 1-6 (d=5) and beyond are included
         for (int j = i + 1; j < n_; j++) {
             int d = dist[j];
-            if (d == 5 || d == 6)
-                repulsion_pairs_.push_back({i, j});
+            if (d == -1 || d >= 5) {
+                // Calculate sigma^2 from sum of vdW radii
+                double sigma = vdw_radius(atomic_numbers[i]) + vdw_radius(atomic_numbers[j]);
+                repulsion_pairs_.emplace_back(i, j, sigma * sigma);
+            }
         }
     }
 }
@@ -90,6 +101,12 @@ double Optimizer::dihedral_energy(double phi, double target_phi) const {
 
 void Optimizer::random_coords(std::vector<Cartesian>& coords, double scale) {
     coords.resize(n_);
+    
+    // Auto-scale based on number of atoms if scale is 0
+    // Use cube root of n_atoms * 2.0 to give atoms enough room
+    if (scale <= 0.0) {
+        scale = std::cbrt((double)n_) * 2.0;
+    }
     
     // First, initialize atoms with coordinate constraints to their target positions
     std::vector<bool> initialized(n_, false);
@@ -188,23 +205,25 @@ double Optimizer::calc_fr(int n, const double* x, double* r, void* user) {
         r[i+2] += k_coord * dz;
     }
     
-    // Non-bonded repulsion (1-5 and 1-6 interactions only)
+    // Non-bonded repulsion (1-6 and beyond) using van der Waals radii
+    // Only applies when d < sigma (sum of vdW radii)
     const double k_rep = opt->k_repulsion_;
     if (k_rep > 0.0) {
-        const double cutoff2 = opt->repulsion_cutoff_ * opt->repulsion_cutoff_;
         for (const auto& pair : opt->repulsion_pairs_) {
-            int i = pair.first, j = pair.second;
-            double dx = coords[i].x - coords[j].x;
-            double dy = coords[i].y - coords[j].y;
-            double dz = coords[i].z - coords[j].z;
+            double dx = coords[pair.i].x - coords[pair.j].x;
+            double dy = coords[pair.i].y - coords[pair.j].y;
+            double dz = coords[pair.i].z - coords[pair.j].z;
             double d2 = dx*dx + dy*dy + dz*dz;
-            if (d2 < cutoff2 && d2 > small * small) {
+            // Only apply repulsion when d < sigma (i.e., d2 < sigma2)
+            if (d2 < pair.sigma2 && d2 > small * small) {
+                // E = k_rep * (sigma/d)^12 = k_rep * sigma2^6 / d2^6
+                double sigma6 = pair.sigma2 * pair.sigma2 * pair.sigma2;
                 double d6 = d2 * d2 * d2;
-                double d12 = d6 * d6;
-                e += k_rep / d12;
-                // gradient: -12 * k_rep / d^14 * diff = -12 * k_rep / (d12 * d2) * diff
-                double g_scale = -12.0 * k_rep / (d12 * d2);
-                int i1 = i * 3, i2 = j * 3;
+                double ratio6 = sigma6 / d6;
+                e += k_rep * ratio6 * ratio6;
+                // gradient: -12 * k_rep * (sigma/d)^12 / d^2 * diff
+                double g_scale = -12.0 * k_rep * ratio6 * ratio6 / d2;
+                int i1 = pair.i * 3, i2 = pair.j * 3;
                 r[i1] += g_scale * dx; r[i1+1] += g_scale * dy; r[i1+2] += g_scale * dz;
                 r[i2] -= g_scale * dx; r[i2+1] -= g_scale * dy; r[i2+2] -= g_scale * dz;
             }
@@ -273,12 +292,15 @@ double Optimizer::energy(const std::vector<Cartesian>& coords) const {
         e += 0.5 * k_coordinate_ * (dx*dx + dy*dy + dz*dz);
     }
     if (k_repulsion_ > 0.0) {
-        const double cutoff2 = repulsion_cutoff_ * repulsion_cutoff_;
         for (const auto& pair : repulsion_pairs_) {
-            double d2 = (coords[pair.first] - coords[pair.second]).sq();
-            if (d2 < cutoff2 && d2 > small * small) {
+            double d2 = (coords[pair.i] - coords[pair.j]).sq();
+            // Only apply repulsion when d < sigma (i.e., d2 < sigma2)
+            if (d2 < pair.sigma2 && d2 > small * small) {
+                // E = k_rep * (sigma/d)^12 = k_rep * sigma2^6 / d2^6
+                double sigma6 = pair.sigma2 * pair.sigma2 * pair.sigma2;
                 double d6 = d2 * d2 * d2;
-                e += k_repulsion_ / (d6 * d6);
+                double ratio6 = sigma6 / d6;
+                e += k_repulsion_ * ratio6 * ratio6;
             }
         }
     }
