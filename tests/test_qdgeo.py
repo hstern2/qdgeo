@@ -66,6 +66,65 @@ def dihedral_diff(angle1_deg, angle2_deg):
     return diff
 
 
+def check_geometry(coords, mol, bond_tol=0.1, angle_tol=5.0, clash_dist=1.0):
+    """Check that geometry is reasonable. Returns list of issues."""
+    issues = []
+    n = mol.GetNumAtoms()
+    
+    # Check bond lengths
+    for bond in mol.GetBonds():
+        i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        dist = np.linalg.norm(coords[i] - coords[j])
+        si = mol.GetAtomWithIdx(i).GetSymbol()
+        sj = mol.GetAtomWithIdx(j).GetSymbol()
+        # Expected bond lengths (approximate) - key is sorted alphabetically
+        expected = {'BrC': 1.94, 'CC': 1.54, 'CH': 1.09, 'CCl': 1.79, 'CO': 1.43, 
+                    'CN': 1.47, 'HO': 0.96, 'HN': 1.01, 'CF': 1.35, 'CS': 1.82}
+        key = ''.join(sorted([si, sj]))
+        exp = expected.get(key, 1.5)
+        if abs(dist - exp) > bond_tol + 0.3:  # Allow flexibility for bond order/aromaticity
+            issues.append(f"Bond {si}({i})-{sj}({j}): {dist:.2f}Å (expected ~{exp:.2f})")
+    
+    # Check bond angles
+    for i in range(n):
+        atom = mol.GetAtomWithIdx(i)
+        neighbors = [nb.GetIdx() for nb in atom.GetNeighbors()]
+        if len(neighbors) < 2:
+            continue
+        hyb = atom.GetHybridization()
+        if hyb == Chem.HybridizationType.SP3:
+            expected_angle = 109.5
+        elif hyb == Chem.HybridizationType.SP2:
+            expected_angle = 120.0
+        elif hyb == Chem.HybridizationType.SP:
+            expected_angle = 180.0
+        else:
+            expected_angle = 109.5
+        
+        for j in range(len(neighbors)):
+            for k in range(j+1, len(neighbors)):
+                n1, n2 = neighbors[j], neighbors[k]
+                ang = get_angle(coords, n1, i, n2)
+                if abs(ang - expected_angle) > angle_tol:
+                    s1 = mol.GetAtomWithIdx(n1).GetSymbol()
+                    s2 = mol.GetAtomWithIdx(n2).GetSymbol()
+                    sc = atom.GetSymbol()
+                    issues.append(f"Angle {s1}({n1})-{sc}({i})-{s2}({n2}): {ang:.1f}° (expected ~{expected_angle:.1f}°)")
+    
+    # Check for clashes (non-bonded atoms too close)
+    for i in range(n):
+        for j in range(i+1, n):
+            if mol.GetBondBetweenAtoms(i, j):
+                continue
+            dist = np.linalg.norm(coords[i] - coords[j])
+            if dist < clash_dist:
+                si = mol.GetAtomWithIdx(i).GetSymbol()
+                sj = mol.GetAtomWithIdx(j).GetSymbol()
+                issues.append(f"Clash {si}({i})-{sj}({j}): {dist:.2f}Å")
+    
+    return issues
+
+
 def get_atoms_by_symbol(mol, symbol):
     """Get list of atom indices with given symbol."""
     return [i for i in range(mol.GetNumAtoms()) if mol.GetAtomWithIdx(i).GetSymbol() == symbol]
@@ -207,8 +266,28 @@ def test_butane_anti():
     write_sdf(coords, mol, "butane_anti.sdf", "Butane Anti")
 
 
+def test_br_cc_cl_default():
+    """Test Br-C-C-Cl default geometry (anti conformation)."""
+    mol = Chem.AddHs(Chem.MolFromSmiles('BrCCCl'))
+    br = get_atoms_by_symbol(mol, 'Br')[0]
+    c_atoms = get_atoms_by_symbol(mol, 'C')
+    cl = get_atoms_by_symbol(mol, 'Cl')[0]
+    
+    coords = qdgeo.build_mol(mol, verbose=1)
+    
+    # Default should be anti (180°)
+    actual = get_dihedral(coords, mol, br, c_atoms[0], c_atoms[1], cl)
+    assert dihedral_diff(actual, 180.0) < 15.0, f"Dihedral {actual:.1f}° != 180°"
+    
+    # Check full geometry - all bond angles must be tetrahedral
+    issues = check_geometry(coords, mol, angle_tol=3.0)
+    assert len(issues) == 0, f"Geometry issues:\n" + "\n".join(issues)
+    
+    write_sdf(coords, mol, "br_cc_cl_anti.sdf", "Br-C-C-Cl (anti)")
+
+
 def test_br_cc_cl_dihedral():
-    """Test Br-C-C-Cl with dihedral constraint."""
+    """Test Br-C-C-Cl with dihedral constraint and full geometry check."""
     mol = Chem.AddHs(Chem.MolFromSmiles('BrCCCl'))
     br = get_atoms_by_symbol(mol, 'Br')[0]
     c_atoms = get_atoms_by_symbol(mol, 'C')
@@ -218,8 +297,14 @@ def test_br_cc_cl_dihedral():
     torsions = {(br, c_atoms[0], c_atoms[1], cl): target}
     coords = qdgeo.build_mol(mol, torsions=torsions, verbose=1)
     
+    # Check dihedral
     actual = get_dihedral(coords, mol, br, c_atoms[0], c_atoms[1], cl)
-    assert dihedral_diff(actual, target) < 15.0
+    assert dihedral_diff(actual, target) < 15.0, f"Dihedral {actual:.1f}° != {target:.1f}°"
+    
+    # Check full geometry - all bond angles must be correct
+    issues = check_geometry(coords, mol, angle_tol=3.0)
+    assert len(issues) == 0, f"Geometry issues:\n" + "\n".join(issues)
+    
     write_sdf(coords, mol, "br_cc_cl.sdf", "Br-C-C-Cl")
 
 
